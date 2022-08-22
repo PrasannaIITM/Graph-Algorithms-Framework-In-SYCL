@@ -4,25 +4,6 @@
 #define DEBUG 1
 using namespace sycl;
 
-void load_from_file(const char *filename, std::vector<int> &vec)
-{
-    std::ifstream input;
-    input.open(filename);
-    int num;
-    while ((input >> num) && input.ignore())
-    {
-        vec.push_back(num);
-    }
-    input.close();
-}
-
-void print_vector(std::vector<int> vec)
-{
-    for (auto x : vec)
-        std::cout << x << " ";
-    std::cout << std::endl;
-}
-
 int main()
 {
     std::vector<int> V, I, E, W;
@@ -45,39 +26,74 @@ int main()
 
     int N = V.size();
     std::vector<int> dist(N, INT_MAX);
-    std::vector<int> dist_i, par;
+    std::vector<int> dist_i(N, INT_MAX), par(N);
+
+    dist[0] = 0;
+    dist_i[0] = 0;
 
     queue Q;
     std::cout << "Selected device: " << Q.get_device().get_info<info::device::name>() << "\n";
 
-    buffer V_buf(V);
-    buffer I_buf(I);
-    buffer E_buf(E);
-    buffer W_buf(W);
-    buffer dist_buf(dist);
-    buffer dist_i_buf(dist_i);
-    buffer par_buf(par);
-
-    for (int round = 1; round < N; round++)
     {
-        Q.submit([&](handler &h)
-                 {
-                     accessor acc_V(V_buf, h, read_only);
-                     accessor acc_I(I_buf, h, read_only);
-                     accessor acc_E(E_buf, h, read_only);
-                     accessor acc_W(W_buf, h, read_only);
-                     accessor acc_dist(dist_buf, h, read_only);
-                     accessor acc_dist_i(dist_i_buf, h, read_write);
+        buffer V_buf{V};
+        buffer I_buf{I};
+        buffer E_buf{E};
+        buffer W_buf{W};
+        buffer dist_buf{dist};
+        buffer dist_i_buf{dist_i};
+        buffer par_buf{par};
 
-                     h.parallel_for(
-                         N, [=](id<1> i){
-                            for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
-                                int w = acc_W[j];
-                                int du = acc_dist[j];
-                                int dv = acc_dist[acc_E[j]];
+        for (int round = 1; round < N; round++)
+        {
+
+            Q.submit([&](handler &h)
+                     {
+                 accessor acc_V{V_buf, h, read_only};
+                 accessor acc_I{I_buf, h, read_only};
+                 accessor acc_E{E_buf, h, read_only};
+                 accessor acc_W{W_buf, h, read_only};
+                 accessor acc_dist{dist_buf, h, read_only};
+                 accessor acc_dist_i{dist_i_buf, h, read_write};
+                 stream out(1024, 256, h);
+                 h.parallel_for(
+                     N, [=](id<1> i){
+                        for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
+                            int w = acc_W[j];
+                            int du = acc_dist[i];
+                            int dv = acc_dist[acc_E[j]];
+                            int new_dist = du + w;
+
+                            if(du == INT_MAX){
+                                continue;
                             }
+
+                            atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(acc_dist_i[acc_E[j]]);
+                            atomic_data.fetch_min(new_dist);
+                            // out<< round << " " << i << " " << j << " " << new_dist << " " << acc_dist_i[acc_E[j]] << endl;
+                        }
+                     }); })
+                .wait();
+
+            Q.submit([&](handler &h)
+                     {
+                 accessor acc_dist{dist_buf, h, read_write};
+                 accessor acc_dist_i{dist_i_buf, h, read_write};
+
+                 h.parallel_for(
+                     N, [=](id<1> i){
+                            if(acc_dist[i] > acc_dist_i[i]){
+                                acc_dist[i] = acc_dist_i[i];
+                            }
+                            acc_dist_i[i] = acc_dist[i];
                          }); })
-            .wait();
+                .wait();
+        }
     }
+
+    for (int i = 0; i < N; i++)
+    {
+        std::cout << i << " " << dist[i] << std::endl;
+    }
+
     return 0;
 }
