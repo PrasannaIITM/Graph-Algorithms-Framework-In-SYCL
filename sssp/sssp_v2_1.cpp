@@ -2,7 +2,8 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 1
-#define NUM_THREADS 1024
+#define BLOCK 2
+#define BLOCK_SIZE 2
 
 using namespace sycl;
 
@@ -27,8 +28,6 @@ int main()
     }
 
     int N = V.size();
-    int stride = ceil(float(N) / NUM_THREADS);
-
     std::vector<int> dist(N, INT_MAX);
     std::vector<int> dist_i(N, INT_MAX), par(N);
 
@@ -58,13 +57,17 @@ int main()
                  accessor acc_W{W_buf, h, read_only};
                  accessor acc_dist{dist_buf, h, read_only};
                  accessor acc_dist_i{dist_i_buf, h, read_write};
-
                  stream out(1024, 256, h);
-
+                 range global{BLOCK};
+                 range local{BLOCK_SIZE};
                  h.parallel_for(
-                     N, [=](id<1> i)
-                     {
-                        for(; i < N; i+= stride){
+                    nd_range{ global, local }, [=](nd_item<1> it){
+                        int idx = it.get_local_id(0) + it.get_local_range(0) * it.get_global_id(0);
+                        int stride = it.get_global_range(0) * it.get_local_range(0);
+                        out<<"FFFFFF   "<<idx<<"  "<<stride<<endl;
+
+                        for(int i = idx; i < N; i+= stride){
+                            out<<"IN  "<<i<<endl;
                             for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
                                 int w = acc_W[j];
                                 int du = acc_dist[i];
@@ -79,19 +82,23 @@ int main()
                                 atomic_data.fetch_min(new_dist);
                                 // out<< round << " " << i << " " << j << " " << new_dist << " " << acc_dist_i[acc_E[j]] << endl;
                             }
-                        } }); })
+                        }
+                     }); })
                 .wait();
 
             Q.submit([&](handler &h)
                      {
                 accessor acc_dist{dist_buf, h, read_write};
                 accessor acc_dist_i{dist_i_buf, h, read_write};
-
+                range global{BLOCK};
+                range local{BLOCK_SIZE};
                 h.parallel_for(
-                    N, [=](id<1> i)
-                    {
+                     nd_range{global, local}, [=](nd_item<1> it)
+                     {
+                    int idx = it.get_global_id(0);
+                    int stride = it.get_global_range(0) * it.get_local_range(0);
 
-                    for (; i < N; i += stride)
+                    for (int i = idx; i < N; i += stride)
                     {
                         if (acc_dist[i] > acc_dist_i[i])
                         {

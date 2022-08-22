@@ -2,17 +2,18 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 1
-#define NUM_THREADS 1024
-
 using namespace sycl;
 
 int main()
 {
     std::vector<int> V, I, E, W;
+
     load_from_file("input/simple/V", V);
     load_from_file("input/simple/I", I);
     load_from_file("input/simple/E", E);
     load_from_file("input/simple/W", W);
+
+    int BLOCK = 1024, BLOCK_SIZE = 1024;
 
     if (DEBUG)
     {
@@ -27,13 +28,11 @@ int main()
     }
 
     int N = V.size();
-    int stride = ceil(float(N) / NUM_THREADS);
-
-    std::vector<int> flag(N, 0);
     std::vector<int> dist(N, INT_MAX);
     std::vector<int> dist_i(N, INT_MAX), par(N);
+    std::vector<bool> flag(N, false);
 
-    flag[0] = 1;
+    flag[0] = true;
     dist[0] = 0;
     dist_i[0] = 0;
 
@@ -55,32 +54,31 @@ int main()
 
             Q.submit([&](handler &h)
                      {
-                accessor acc_V{V_buf, h, read_only};
-                accessor acc_I{I_buf, h, read_only};
-                accessor acc_E{E_buf, h, read_only};
-                accessor acc_W{W_buf, h, read_only};
-                accessor acc_dist{dist_buf, h, read_only};
-                accessor acc_dist_i{dist_i_buf, h, read_write};
-                accessor acc_flag{flag_buf, h, read_write};
+                 accessor acc_V{V_buf, h, read_only};
+                 accessor acc_I{I_buf, h, read_only};
+                 accessor acc_E{E_buf, h, read_only};
+                 accessor acc_W{W_buf, h, read_only};
+                 accessor acc_dist{dist_buf, h, read_only};
+                 accessor acc_dist_i{dist_i_buf, h, read_write};
+                 accessor acc_flag{flag_buf, h, read_write};
+                 stream out(1024, 256, h);
+                 range global{BLOCK};
+                 range local{BLOCK_SIZE};
+                 h.parallel_for(
+                    nd_range{global, local}, [=](nd_item<1> it)){
+                        int i = it.get_global_id(0);
+                        int stride = it.get_global_range(0) * it.get_local_range(0);
 
-                stream out(1024, 256, h);
-
-                h.parallel_for(
-                     N, [=](id<1> i)
-                     {
-                        for(; i < N; i+= stride){
-                            if (acc_flag[i])
-                            {
-                                acc_flag[i] = 0;
-                                for (int j = acc_I[i]; j < acc_I[i + 1]; j++)
-                                {
+                        for(int i = 0; i < N; i+= stride){
+                            if(acc_flag[i]){
+                                acc_flag[i] = false;
+                                for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
                                     int w = acc_W[j];
                                     int du = acc_dist[i];
                                     int dv = acc_dist[acc_E[j]];
                                     int new_dist = du + w;
 
-                                    if (du == INT_MAX)
-                                    {
+                                    if(du == INT_MAX){
                                         continue;
                                     }
 
@@ -90,7 +88,7 @@ int main()
                                 }
                             }
                         }
-                        }); })
+                     }); })
                 .wait();
 
             Q.submit([&](handler &h)
@@ -100,25 +98,29 @@ int main()
                 accessor acc_flag{flag_buf, h, read_write};
 
                 h.parallel_for(
-                    N, [=](id<1> i)
-                    {
+                    nd_range{global, local}, [=](nd_item<1> it))
+                {
+                    int i = it.get_global_id(0);
+                    int stride = it.get_global_range(0) * it.get_local_range(0);
 
-                    for (; i < N; i += stride)
+                    for (int i = 0; i < N; i += stride)
                     {
                         if (acc_dist[i] > acc_dist_i[i])
                         {
                             acc_dist[i] = acc_dist_i[i];
-                            acc_flag[i] = 1;
+                            acc_flag[i] = true;
                         }
                         acc_dist_i[i] = acc_dist[i];
-                    } }); })
+                    });
+                })
                 .wait();
         }
-    }
-    for (int i = 0; i < N; i++)
-    {
-        std::cout << i << " " << dist[i] << std::endl;
-    }
+        }
 
-    return 0;
-}
+        for (int i = 0; i < N; i++)
+        {
+            std::cout << i << " " << dist[i] << std::endl;
+        }
+
+        return 0;
+    }
