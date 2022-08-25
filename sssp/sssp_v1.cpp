@@ -1,16 +1,16 @@
 #include <CL/sycl.hpp>
 #include <iostream>
 #include <fstream>
-#define DEBUG 1
+#define DEBUG 0
 using namespace sycl;
 
 int main()
 {
     std::vector<int> V, I, E, W;
-    load_from_file("input/simple/V", V);
-    load_from_file("input/simple/I", I);
-    load_from_file("input/simple/E", E);
-    load_from_file("input/simple/W", W);
+    load_from_file("input/USAud/V", V);
+    load_from_file("input/USAud/I", I);
+    load_from_file("input/USAud/E", E);
+    load_from_file("input/USAud/W", W);
 
     if (DEBUG)
     {
@@ -31,7 +31,9 @@ int main()
     dist[0] = 0;
     dist_i[0] = 0;
 
-    queue Q;
+    // The default device selector will select the most performant device.
+    default_selector d_selector;
+    queue Q(d_selector);
     std::cout << "Selected device: " << Q.get_device().get_info<info::device::name>() << "\n";
 
     {
@@ -57,6 +59,7 @@ int main()
                  stream out(1024, 256, h);
                  h.parallel_for(
                      N, [=](id<1> i){
+                        // out<<"Node "<<i<<endl;
                         for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
                             int w = acc_W[j];
                             int du = acc_dist[i];

@@ -1,7 +1,7 @@
 #include <CL/sycl.hpp>
 #include <iostream>
 #include <fstream>
-#define DEBUG 1
+#define DEBUG 0
 #define NUM_THREADS 1024
 
 using namespace sycl;
@@ -9,10 +9,10 @@ using namespace sycl;
 int main()
 {
     std::vector<int> V, I, E, W;
-    load_from_file("input/simple/V", V);
-    load_from_file("input/simple/I", I);
-    load_from_file("input/simple/E", E);
-    load_from_file("input/simple/W", W);
+    load_from_file("input/USAud/V", V);
+    load_from_file("input/USAud/I", I);
+    load_from_file("input/USAud/E", E);
+    load_from_file("input/USAud/W", W);
 
     if (DEBUG)
     {
@@ -27,7 +27,7 @@ int main()
     }
 
     int N = V.size();
-    int stride = ceil(float(N) / NUM_THREADS);
+    int stride = NUM_THREADS;
 
     std::vector<int> flag(N, 0);
     std::vector<int> dist(N, INT_MAX);
@@ -52,7 +52,7 @@ int main()
 
         for (int round = 1; round < N; round++)
         {
-
+            std::cout << "Round num : " << round << "Percentage : " << round / N << std::endl;
             Q.submit([&](handler &h)
                      {
                 accessor acc_V{V_buf, h, read_only};
@@ -66,7 +66,7 @@ int main()
                 stream out(1024, 256, h);
 
                 h.parallel_for(
-                     N, [=](id<1> i)
+                     NUM_THREADS, [=](id<1> i)
                      {
                         for(; i < N; i+= stride){
                             if (acc_flag[i])
@@ -100,7 +100,7 @@ int main()
                 accessor acc_flag{flag_buf, h, read_write};
 
                 h.parallel_for(
-                    N, [=](id<1> i)
+                    NUM_THREADS, [=](id<1> i)
                     {
 
                     for (; i < N; i += stride)

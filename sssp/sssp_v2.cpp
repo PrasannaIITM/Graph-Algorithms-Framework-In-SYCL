@@ -27,7 +27,7 @@ int main()
     }
 
     int N = V.size();
-    int stride = ceil(float(N) / NUM_THREADS);
+    int stride = NUM_THREADS;
 
     std::vector<int> dist(N, INT_MAX);
     std::vector<int> dist_i(N, INT_MAX), par(N);
@@ -62,7 +62,7 @@ int main()
                  stream out(1024, 256, h);
 
                  h.parallel_for(
-                     N, [=](id<1> i)
+                     NUM_THREADS, [=](id<1> i)
                      {
                         for(; i < N; i+= stride){
                             for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
@@ -88,7 +88,7 @@ int main()
                 accessor acc_dist_i{dist_i_buf, h, read_write};
 
                 h.parallel_for(
-                    N, [=](id<1> i)
+                    NUM_THREADS, [=](id<1> i)
                     {
 
                     for (; i < N; i += stride)
