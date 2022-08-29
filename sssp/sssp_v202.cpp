@@ -1,30 +1,23 @@
 #include <CL/sycl.hpp>
 #include <iostream>
 #include <fstream>
-#define DEBUG 1
-#define NUM_THREADS 1024
+#define DEBUG 0
 
 using namespace sycl;
 
 int main()
 {
-
-    std::chrono::steady_clock::time_point tic_0 = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point tic, toc;
     std::string name = "simple";
     // The default device selector will select the most performant device.
     default_selector d_selector;
     queue Q(d_selector);
-    std::cout << "Selected device: " << Q.get_device().get_info<info::device::name>() << "\n";
 
-    std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
     std::vector<int> V, I, E, W;
     load_from_file("input/" + name + "/V", V);
     load_from_file("input/" + name + "/I", I);
     load_from_file("input/" + name + "/E", E);
     load_from_file("input/" + name + "/W", W);
-    std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
-    std::cout << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
     if (DEBUG)
     {
         std::cout << "Node: ";
@@ -38,15 +31,24 @@ int main()
     }
 
     int N = V.size();
-    int stride = NUM_THREADS;
+    std::vector<int> num_threads(11);
+    int prev = 1024;
+    num_threads[0] = prev;
 
-    std::vector<int> dist(N, INT_MAX);
-    std::vector<int> dist_i(N, INT_MAX), par(N);
-
-    dist[0] = 0;
-    dist_i[0] = 0;
-
+    for (int i = 1; i < num_threads.size(); i++)
     {
+        prev = prev * 2;
+        num_threads[i] = prev;
+    }
+
+    for (auto NUM_THREADS : num_threads)
+    {
+        std::vector<int> dist(N, INT_MAX);
+        std::vector<int> dist_i(N, INT_MAX), par(N);
+
+        dist[0] = 0;
+        dist_i[0] = 0;
+
         buffer<int> V_buf{V};
         buffer<int> I_buf{I};
         buffer<int> E_buf{E};
@@ -55,11 +57,11 @@ int main()
         buffer<int> dist_i_buf{dist_i};
         buffer<int> par_buf{par};
 
+        int stride = NUM_THREADS;
         tic = std::chrono::steady_clock::now();
         int *early_stop = malloc_shared<int>(1, Q);
         for (int round = 1; round < N; round++)
         {
-            std::cout << "Round num: " << round << std::endl;
             if (*early_stop == 1)
             {
                 break;
@@ -115,24 +117,8 @@ int main()
                 .wait();
         }
         toc = std::chrono::steady_clock::now();
-        std::cout << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+        std::cout << NUM_THREADS << "  " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
     }
-    tic = std::chrono::steady_clock::now();
-    std::ofstream myfile;
-
-    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/sssp_v201_result_" + NUM_THREADS_STR + ".txt");
-
-    for (int i = 0; i < N; i++)
-    {
-        myfile << i << " " << dist[i] << std::endl;
-    }
-    myfile.close();
-    toc = std::chrono::steady_clock::now();
-    std::cout << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-    std::cout << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
 
     return 0;
 }

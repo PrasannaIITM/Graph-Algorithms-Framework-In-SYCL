@@ -2,8 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 1
-#define NUM_THREADS 1024
-
+#define NUM_THREADS 65536
 using namespace sycl;
 
 int main()
@@ -37,11 +36,9 @@ int main()
         print_vector(W);
     }
 
-    int N = V.size();
-    int stride = NUM_THREADS;
-
+    int N = V.size(), stride = NUM_THREADS;
     std::vector<int> dist(N, INT_MAX);
-    std::vector<int> dist_i(N, INT_MAX), par(N);
+    std::vector<int> dist_i(N, INT_MAX);
 
     dist[0] = 0;
     dist_i[0] = 0;
@@ -53,9 +50,12 @@ int main()
         buffer<int> W_buf{W};
         buffer<int> dist_buf{dist};
         buffer<int> dist_i_buf{dist_i};
-        buffer<int> par_buf{par};
 
-        tic = std::chrono::steady_clock::now();
+        int *wlin = malloc_shared<int>(N, Q);
+        int *wlout = malloc_shared<int>(N, Q);
+
+        *wlin
+            tic = std::chrono::steady_clock::now();
         int *early_stop = malloc_shared<int>(1, Q);
         for (int round = 1; round < N; round++)
         {
@@ -67,53 +67,63 @@ int main()
             *early_stop = 1;
             Q.submit([&](handler &h)
                      {
-                 accessor acc_V{V_buf, h, read_only};
-                 accessor acc_I{I_buf, h, read_only};
-                 accessor acc_E{E_buf, h, read_only};
-                 accessor acc_W{W_buf, h, read_only};
-                 accessor acc_dist{dist_buf, h, read_only};
-                 accessor acc_dist_i{dist_i_buf, h, read_write};
+                accessor acc_V{V_buf, h, read_only};
+                accessor acc_I{I_buf, h, read_only};
+                accessor acc_E{E_buf, h, read_only};
+                accessor acc_W{W_buf, h, read_only};
+                accessor acc_dist{dist_buf, h, read_only};
+                accessor acc_dist_i{dist_i_buf, h, read_write};
+                accessor acc_wlin{wlin_buf, h, read_write};
 
-                 h.parallel_for(
-                     NUM_THREADS, [=](id<1> i)
+                h.parallel_for(
+                     acc_wlin.size(), [=](id<1> i)
                      {
-                        for(; i < N; i+= stride){
-                            for(int j = acc_I[i]; j < acc_I[i + 1]; j++){
-                                int w = acc_W[j];
-                                int du = acc_dist[i];
-                                int dv = acc_dist[acc_E[j]];
-                                int new_dist = du + w;
+                        int node = acc_wlin[i];
+                        for (int j = acc_I[node]; j < acc_I[node + 1]; j++)
+                        {
+                            int neigh = acc_E[j];
+                            int w = acc_W[j];
+                            int du = acc_dist[node];
+                            int dv = acc_dist[neigh];
+                            int new_dist = du + w;
 
-                                if(du == INT_MAX){
-                                    continue;
-                                }
-
-                                atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(acc_dist_i[acc_E[j]]);
-                                atomic_data.fetch_min(new_dist);
+                            if (du == INT_MAX)
+                            {
+                                continue;
                             }
-                        } }); })
+
+                            atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(acc_dist_i[neigh]);
+                            atomic_data.fetch_min(new_dist);
+                            
+                        }
+                        }); })
                 .wait();
 
             Q.submit([&](handler &h)
                      {
-                accessor acc_dist{dist_buf, h, read_write};
-                accessor acc_dist_i{dist_i_buf, h, read_write};
+                         accessor acc_dist{dist_buf, h, read_write};
+                         accessor acc_dist_i{dist_i_buf, h, read_write};
 
-                h.parallel_for(
-                    NUM_THREADS, [=](id<1> i)
-                    {
+                         h.parallel_for(
+                             NUM_THREADS, [=](id<1> i)
+                             {
 
-                    for (; i < N; i += stride)
-                    {
-                        if (acc_dist[i] > acc_dist_i[i])
-                        {
-                            acc_dist[i] = acc_dist_i[i];
-                            *early_stop = 0;
-                        }
-                        acc_dist_i[i] = acc_dist[i];
+                            for (; i < N; i += stride)
+                            {
+                                if (acc_dist[i] > acc_dist_i[i])
+                                {
+                                    acc_dist[i] = acc_dist_i[i];
+                                    wlout[i];
+                                    *early_stop = 0;
+                                }
+                                acc_dist_i[i] = acc_dist[i];
                     } }); })
                 .wait();
+
+            host_accessor acc_wlin(wlin_buf);
+            acc_wlin = wlout;
         }
+
         toc = std::chrono::steady_clock::now();
         std::cout << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
     }
@@ -121,7 +131,7 @@ int main()
     std::ofstream myfile;
 
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/sssp_v201_result_" + NUM_THREADS_STR + ".txt");
+    myfile.open("output/" + name + "/sssp_v301_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
