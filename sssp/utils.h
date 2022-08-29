@@ -1,10 +1,8 @@
-#include <CL/sycl.hpp>
 #include <iostream>
 #include <fstream>
+#include <vector>
 
-using namespace sycl;
-
-void load_from_file(const char *filename, std::vector<int> &vec)
+void load_from_file(std::string filename, std::vector<int> &vec)
 {
     std::ifstream input;
     input.open(filename);
