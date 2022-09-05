@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-#define NUM_THREADS 65536
+#define NUM_THREADS 1048576
 
 using namespace sycl;
 
@@ -40,11 +40,9 @@ int main()
     int N = V.size();
     int stride = NUM_THREADS;
 
-    std::vector<int> flag(N, 0);
     std::vector<int> dist(N, INT_MAX);
-    std::vector<int> dist_i(N, INT_MAX), par(N);
+    std::vector<int> dist_i(N, INT_MAX);
 
-    flag[0] = 1;
     dist[0] = 0;
     dist_i[0] = 0;
 
@@ -55,11 +53,9 @@ int main()
         buffer<int> W_buf{W};
         buffer<int> dist_buf{dist};
         buffer<int> dist_i_buf{dist_i};
-        buffer<int> par_buf{par};
-        buffer<int> flag_buf{flag};
 
         tic = std::chrono::steady_clock::now();
-        int *early_stop = malloc_shared<int>(1, Q);
+
         int *active_count = malloc_shared<int>(1, Q);
         int *wl = malloc_shared<int>(N, Q);
         *active_count = 1;
@@ -68,11 +64,10 @@ int main()
         for (int round = 1; round < N; round++)
         {
             std::cout << "Round num: " << round << std::endl;
-            if (*early_stop == 1)
+            if (*active_count == 0)
             {
                 break;
             }
-            *early_stop = 1;
             Q.submit([&](handler &h)
                      {
                 accessor acc_V{V_buf, h, read_only};
@@ -81,7 +76,6 @@ int main()
                 accessor acc_W{W_buf, h, read_only};
                 accessor acc_dist{dist_buf, h, read_only};
                 accessor acc_dist_i{dist_i_buf, h, read_write};
-                accessor acc_flag{flag_buf, h, read_write};
 
                 h.parallel_for(
                      *active_count, [=](id<1> i)
@@ -108,14 +102,12 @@ int main()
 
             *active_count = 0;
             free(wl, Q);
-
             wl = malloc_shared<int>(N, Q);
 
             Q.submit([&](handler &h)
                      {
                 accessor acc_dist{dist_buf, h, read_write};
                 accessor acc_dist_i{dist_i_buf, h, read_write};
-                accessor acc_flag{flag_buf, h, read_write};
 
                 h.parallel_for(
                     NUM_THREADS, [=](id<1> i)
@@ -126,8 +118,6 @@ int main()
                         if (acc_dist[i] > acc_dist_i[i])
                         {
                             acc_dist[i] = acc_dist_i[i];
-                            acc_flag[i] = 1;
-                            *early_stop = 0;
                             atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*active_count);
                             wl[atomic_data++] = i;
                         }

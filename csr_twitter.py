@@ -4,7 +4,7 @@ import random
 DEBUG = 0
 HERE = 1
 
-name = "USAud"
+name = "clean-soc-twitter"
 if HERE:
     filename = f"raw_graphs/{name}.txt"
 else:
@@ -13,23 +13,29 @@ else:
 with open(filename) as f:
     l = f.readlines()
 
-# l = l[1:]
+l = l[1:]
 
 for i in range(len(l)):
     l[i] = list(map(int, l[i].strip().split(" ")))
 
 g = defaultdict(list)
+seen = set()
 
-for i in range(0, len(l), 2):
+for i in range(0, len(l)):
     [u, v] = l[i]
-    assert l[i + 1][::-1] == l[i]
     w = random.randint(1, 100)
     if DEBUG:
         print(f"{u} {v} {w}")
     g[u].append([v, w])
-    g[v].append([u, w])
+    seen.add(u)
+    seen.add(v)
 
-V = sorted(list(g.keys()))
+V = sorted(list(seen))
+maxEdge = V[-1]
+try:
+    assert V == [i for i in range(maxEdge + 1)]
+except:
+    print("Not continuous")
 E = []
 I = []
 W = []

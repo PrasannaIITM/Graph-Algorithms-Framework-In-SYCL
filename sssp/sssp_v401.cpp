@@ -54,8 +54,7 @@ int main()
         int *wlin = malloc_shared<int>(N, Q);
         int *wlout = malloc_shared<int>(N, Q);
 
-        *wlin
-            tic = std::chrono::steady_clock::now();
+        tic = std::chrono::steady_clock::now();
         int *early_stop = malloc_shared<int>(1, Q);
         for (int round = 1; round < N; round++)
         {
