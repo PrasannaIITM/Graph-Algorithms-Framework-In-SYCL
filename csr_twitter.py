@@ -4,7 +4,7 @@ import random
 DEBUG = 0
 HERE = 1
 
-name = "clean-soc-twitter"
+name = "clean-soc-sinaweibo"
 if HERE:
     filename = f"raw_graphs/{name}.txt"
 else:
@@ -13,22 +13,28 @@ else:
 with open(filename) as f:
     l = f.readlines()
 
-l = l[1:]
+# l = l[1:]
 
 for i in range(len(l)):
-    l[i] = list(map(int, l[i].strip().split(" ")))
+    try:
+        l[i] = list(map(int, l[i].strip().split(" ")))
+    except:
+        print(f"[WARN] Unable to parse line {i}")
 
 g = defaultdict(list)
 seen = set()
 
 for i in range(0, len(l)):
-    [u, v] = l[i]
-    w = random.randint(1, 100)
-    if DEBUG:
-        print(f"{u} {v} {w}")
-    g[u].append([v, w])
-    seen.add(u)
-    seen.add(v)
+    try:
+        [u, v] = l[i]
+        w = random.randint(1, 100)
+        if DEBUG:
+            print(f"{u} {v} {w}")
+        g[u].append([v, w])
+        seen.add(u)
+        seen.add(v)
+    except:
+        print(f"[WARN] Skipped line {i} = {l[i]}")
 
 V = sorted(list(seen))
 maxEdge = V[-1]
@@ -61,8 +67,15 @@ with open(f"csr_graphs/{name}/I", "w") as f:
     f.write(" ".join(list(map(str, I))))
 
 with open(f"csr_graphs/{name}/E", "w") as f:
-    f.write(" ".join(list(map(str, E))))
+    for i, ele in enumerate(E):
+        f.write(f"{ele}")
+        if i != len(E) - 1:
+            f.write(" ")
+        
 
 with open(f"csr_graphs/{name}/W", "w") as f:
-    f.write(" ".join(list(map(str, W))))
+    for i, ele in enumerate(W):
+        f.write(f"{ele}")
+        if i != len(W) - 1:
+            f.write(" ")
 

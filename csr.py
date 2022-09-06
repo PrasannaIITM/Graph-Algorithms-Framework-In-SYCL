@@ -4,7 +4,7 @@ import random
 DEBUG = 0
 HERE = 1
 
-name = "USAud"
+name = "GermanyRoadud"
 if HERE:
     filename = f"raw_graphs/{name}.txt"
 else:
@@ -16,13 +16,16 @@ with open(filename) as f:
 # l = l[1:]
 
 for i in range(len(l)):
-    l[i] = list(map(int, l[i].strip().split(" ")))
+    l[i] = list(map(int, l[i].strip().split()))
 
 g = defaultdict(list)
 
 for i in range(0, len(l), 2):
-    [u, v] = l[i]
-    assert l[i + 1][::-1] == l[i]
+    try:
+        [u, v] = l[i]
+        assert l[i + 1][::-1] == l[i]
+    except:
+        print("REV Edge not found?")
     w = random.randint(1, 100)
     if DEBUG:
         print(f"{u} {v} {w}")

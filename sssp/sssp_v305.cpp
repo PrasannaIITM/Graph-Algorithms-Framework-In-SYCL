@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-#define NUM_THREADS 1048576
+#define NUM_THREADS 1024
 
 using namespace sycl;
 
@@ -10,8 +10,7 @@ int main()
 {
 
     std::chrono::steady_clock::time_point tic_0 = std::chrono::steady_clock::now();
-    std::string name = "clean-soc-twitter";
-    std::cout << "Processing " << name << std::endl;
+    std::string name = "simple";
     // The default device selector will select the most performant device.
     default_selector d_selector;
     queue Q(d_selector);
@@ -63,44 +62,42 @@ int main()
     int *dev_dist = malloc_device<int>(N, Q);
     int *dev_dist_i = malloc_device<int>(N, Q);
 
-    int source = 19537227; // clean-soc-twitter
-    //    int source = 0;
-    Q.submit([&](handler &h)
-             { h.parallel_for(NUM_THREADS, [=](id<1> i)
-                              {
-                                  for (; i < N; i += stride)
-                                  {
-                                      dev_flag[i] = 0;
-                                      dev_dist[i] = INT_MAX;
-                                      dev_dist_i[i] = INT_MAX;
-
-                                      if (i == source)
-                                      {
-                                          dev_flag[source] = 1;
-                                          dev_dist[source] = 0;
-                                          dev_dist_i[source] = 0;
-                                      }
-                                  } }); });
-    Q.wait();
-
+    for (int source = 0; source < N; source++)
     {
+        Q.submit([&](handler &h)
+                 { h.parallel_for(NUM_THREADS, [=](id<1> i)
+                                  {
+                        int curr_node = i;
+                        for(; i < N; i+= stride){
+                            dev_flag[i] = 0;
+                            dev_dist[i] = INT_MAX;
+                            dev_dist_i[i] = INT_MAX;
+                        }
 
-        tic = std::chrono::steady_clock::now();
-        std::cout << "Starting SSSP..." << std::endl;
-        int *early_stop = malloc_shared<int>(1, Q);
-        for (int round = 1; round < N; round++)
+                        if(curr_node == source){
+                            dev_flag[source] = 1;
+                            dev_dist[source] = 0;
+                            dev_dist_i[source] = 0;
+                        } }); });
+        Q.wait();
+
         {
-            std::cout << "Round num: " << round << std::endl;
-            if (*early_stop == 1)
-            {
-                break;
-            }
-            *early_stop = 1;
 
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           NUM_THREADS, [=](id<1> i)
-                           {
+            tic = std::chrono::steady_clock::now();
+            int *early_stop = malloc_shared<int>(1, Q);
+            for (int round = 1; round < N; round++)
+            {
+                // std::cout << "Round num: " << round << std::endl;
+                if (*early_stop == 1)
+                {
+                    break;
+                }
+                *early_stop = 1;
+
+                Q.submit([&](handler &h)
+                         { h.parallel_for(
+                               NUM_THREADS, [=](id<1> i)
+                               {
                            
                             for(; i < N; i+= stride){
                                 if (dev_flag[i])
@@ -122,12 +119,12 @@ int main()
                                     }
                                 }
                         } }); })
-                .wait();
+                    .wait();
 
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           NUM_THREADS, [=](id<1> i)
-                           {
+                Q.submit([&](handler &h)
+                         { h.parallel_for(
+                               NUM_THREADS, [=](id<1> i)
+                               {
 
                     for (; i < N; i += stride)
                     {
@@ -139,37 +136,29 @@ int main()
                         }
                         dev_dist_i[i] = dev_dist[i];
                     } }); })
-                .wait();
+                    .wait();
+            }
+            toc = std::chrono::steady_clock::now();
+            // std::cout << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
         }
-        toc = std::chrono::steady_clock::now();
-        std::cout << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-    }
-    tic = std::chrono::steady_clock::now();
-    std::ofstream myfile;
-    int num_covered = 0;
 
-    Q.submit([&](handler &h)
-             { h.memcpy(&dist[0], dev_dist, N * sizeof(int)); })
-        .wait();
+        int num_covered = 0;
 
-    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/sssp_v303_result_" + NUM_THREADS_STR + ".txt");
+        Q.submit([&](handler &h)
+                 { h.memcpy(&dist[0], dev_dist, N * sizeof(int)); })
+            .wait();
 
-    for (int i = 0; i < N; i++)
-    {
-        if (dist[i] != INT_MAX)
+        for (int i = 0; i < N; i++)
         {
-            num_covered += 1;
+            if (dist[i] != INT_MAX)
+            {
+                num_covered += 1;
+            }
         }
-        myfile << i << " " << dist[i] << std::endl;
+        float perc = 100 * (1.0 * num_covered) / N;
+        if (perc > 25)
+            std::cout << "FOUND";
+        std::cout << "Percentage coverage = " << perc << "FOR source = " << source << std::endl;
     }
-    myfile.close();
-    toc = std::chrono::steady_clock::now();
-    std::cout << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-    std::cout << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
-    std::cout << "Percentage coverage = " << 100 * (1.0 * num_covered) / N << "Num nodes covered = " << num_covered << std::endl;
-
     return 0;
 }
