@@ -95,7 +95,8 @@ int main()
                                for (; i < N; i += stride)
                                {
                                    float sum = 0;
-                                   for (int edge = dev_RI[i]; edge < dev_RI[i + 1]; edge++){
+                                   //pull
+                                   for (int edge = dev_RI[i]; edge < dev_RI[i + 1]; edge++){ 
                                        int nbr = dev_RE[edge];
                                        sum = sum + dev_pagerank[nbr] / (dev_I[nbr + 1] - dev_I[nbr]);
                                    }
