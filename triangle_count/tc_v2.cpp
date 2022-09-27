@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-#define NUM_THREADS 4
+#define NUM_THREADS 1024
 
 using namespace sycl;
 
@@ -70,14 +70,35 @@ int main()
                                     if(u < i){
                                         for (int edge2 = dev_I[i]; edge2 < dev_I[i + 1]; edge2++){
                                             int w = dev_E[edge2];
+                                            int nbrs_connected = 0;
                                             if(w > i){
-                                                int nbrs_connected = 0;
-                                                for (int edge = dev_I[u]; edge < dev_I[u + 1]; edge++){
-                                                    int nbr = dev_E[edge];
-                                                    if(nbr == w){
-                                                         nbrs_connected = 1;
-                                                         break;
+                                                
+                                                int start_edge =  dev_I[u]; 
+                                                int end_edge =  dev_I[u + 1] - 1; 
+
+                                                if(dev_E[start_edge] == w){
+                                                    nbrs_connected = 1;
+                                                }
+                                                else if(dev_E[end_edge] == 1){
+                                                    nbrs_connected = 1;
+                                                }
+                                                else
+                                                {    while(start_edge <= end_edge){
+                                                        int mid = start_edge + (end_edge - start_edge)/2;
+                                                        if(dev_E[mid] == w){
+                                                            nbrs_connected = 1;
+                                                            break;
+                                                        }
+                                                        if(w < dev_E[mid]){
+                                                            end_edge = mid - 1;
+                                                        }
+                                                        if (w > dev_E[mid])
+                                                        {
+                                                            start_edge = mid + 1;
+                                                        }
                                                     }
+                                                }
+                            
                                                 }
                                                 if(nbrs_connected){
                                                     atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*triangle_count);
@@ -86,8 +107,7 @@ int main()
                                             }
                                         }
                                     }
-                                }
-} }); })
+                                } }); })
         .wait();
 
     toc = std::chrono::steady_clock::now();
@@ -97,7 +117,7 @@ int main()
     std::ofstream myfile;
 
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/tc_v1_result_" + NUM_THREADS_STR + ".txt");
+    myfile.open("output/" + name + "/tc_v2_result_" + NUM_THREADS_STR + ".txt");
 
     myfile << "Number of triangles in graph =  " << *triangle_count << std::endl;
 
