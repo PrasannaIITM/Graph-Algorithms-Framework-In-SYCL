@@ -59,6 +59,16 @@ int main()
 
     Q.wait();
 
+    Q.submit([&](handler &h)
+             { h.parallel_for(
+                   NUM_THREADS, [=](id<1> v)
+                   {
+                           for (; v < N; v += stride)
+                           {
+                               dev_bc[v] = 0;
+                           } }); })
+        .wait();
+
     tic = std::chrono::steady_clock::now();
     std::cout << "Starting betweenness centrality calculation..." << std::endl;
 
@@ -80,24 +90,23 @@ int main()
 
     while (*s < N)
     {
-        std::cout << "source = " << *s << std::endl;
         Q.submit([&](handler &h)
                  { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
+                       NUM_THREADS, [=](id<1> v)
                        {
-                           for (; i < N; i += stride)
+                           for (; v < N; v += stride)
                            {
-                               if (i == *s)
+                               if (v == *s)
                                {
-                                   dev_d[i] = 0;
-                                   dev_sigma[i] = 1;
+                                   dev_d[v] = 0;
+                                   dev_sigma[v] = 1;
                                }
                                else
                                {
-                                   dev_d[i] = INT_MAX;
-                                   dev_sigma[i] = 0;
+                                   dev_d[v] = INT_MAX;
+                                   dev_sigma[v] = 0;
                                }
-                               dev_delta[i] = 0;
+                               dev_delta[v] = 0;
                            } }); })
             .wait();
 
@@ -113,30 +122,17 @@ int main()
 
         while (1)
         {
-            std::cout << "Q curr len = " << *q_curr_len << std::endl;
             Q.submit([&](handler &h)
-                     { 
-                        stream out(1024, 256, h);
-                        h.parallel_for(
+                     { h.parallel_for(
                            *q_curr_len, [=](id<1> i)
                            {
-                                int v = q_curr[i];
-                                out<<"Exploring..."<<v<<endl;
+                               int v = q_curr[i];
                                for (int r = dev_I[v]; r < dev_I[v + 1]; r++){
                                    int w = dev_E[r];
 
                                     atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_d[w]);
                                     int old = INT_MAX;
-                                    out<<dev_d[w]<<" "<<dev_d[v] + 1<<endl;
                                     old = atomic_data.compare_exchange_strong(old, dev_d[v] + 1);
-                                    // if (dev_d[w] == INT_MAX)
-                                    // {
-                                    //     dev_d[w] = dev_d[v] + 1;
-                                    //     atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*q_next_len);
-                                    //     int t = atomic_data++;
-                                    //     q_next[t] = w;
-                                    // }
-                                    out<<"PAR = "<<v<<"  After update "<<old<<" "<<w<<" "<<dev_d[w]<<endl;
                                     if(old){
                                         atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*q_next_len);
                                         int t = atomic_data++;
@@ -154,7 +150,6 @@ int main()
 
             if (*q_next_len == 0)
             {
-                // *depth = dev_d[S[*S_len - 1]];
                 break;
             }
             else
@@ -176,43 +171,24 @@ int main()
                 *depth += 1;
             }
         }
-        for (int i = 0; i < N; i++)
-        {
-            std::cout << ends[i] << " ";
-        }
-        std::cout << std::endl;
-
-        for (int i = 0; i < N; i++)
-        {
-            std::cout << S[i] << " ";
-        }
-        std::cout << std::endl;
-        std::cout << "DEPTH = " << *depth << std::endl;
-        // *depth -= 1;
         while (*depth >= 0)
         {
-            std::cout << "depth = " << *depth << std::endl;
             Q.submit([&](handler &h)
-                     { 
-                        stream out(1024, 256, h);
-                        h.parallel_for(
+                     { h.parallel_for(
                            ends[*depth + 1] - ends[*depth], [=](id<1> i)
                            {
                                int tid = i + ends[*depth];
-                               
                                int w = S[tid];
-                               out << "i = " << i << "tid = " << tid << "curr = "<<w<<endl;
                                int dsw = 0;
-                               int sw = dev_sigma[w];
                                for (int r = dev_I[w]; r < dev_I[w + 1]; r++)
                                {
                                    int v = dev_E[r];
                                    if (dev_d[v] == dev_d[w] + 1)
                                    {
-                                       dsw += (((float)sw / dev_sigma[v]) * ((float)1 + dev_delta[v]));
+                                       atomic_ref<float, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
+                                       atomic_data += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
                                    }
                                }
-                               dev_delta[w] = dsw;
                                if (w != *s)
                                {
                                    dev_bc[w] += dev_delta[w];
@@ -224,6 +200,7 @@ int main()
         *s += 1;
     }
 
+    std::cout << std::endl;
     toc = std::chrono::steady_clock::now();
     std::cout << "Time to run betweenness centrality: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
