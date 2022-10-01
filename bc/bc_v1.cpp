@@ -45,10 +45,10 @@ int main()
     int *dev_E = malloc_device<int>(E.size(), Q);
     float *dev_bc = malloc_shared<float>(bc.size(), Q);
     float *dev_delta = malloc_shared<float>(N, Q);
-    int *dev_rev_stack = malloc_shared<int>(N, Q);
+    int *S = malloc_shared<int>(N, Q);
     int *dev_d = malloc_shared<int>(N, Q);
     int *dev_sigma = malloc_shared<int>(N, Q);
-    int *dev_end_point = malloc_shared<int>(N, Q);
+    int *ends = malloc_shared<int>(N, Q);
 
     Q.submit([&](handler &h)
              { h.memcpy(dev_V, &V[0], V.size() * sizeof(int)); });
@@ -60,6 +60,16 @@ int main()
              { h.memcpy(dev_E, &E[0], E.size() * sizeof(int)); });
 
     Q.wait();
+
+    Q.submit([&](handler &h)
+             { h.parallel_for(
+                   NUM_THREADS, [=](id<1> v)
+                   {
+                           for (; v < N; v += stride)
+                           {
+                               dev_bc[v] = 0;
+                           } }); })
+        .wait();
 
     tic = std::chrono::steady_clock::now();
     std::cout << "Starting betweenness centrality calculation..." << std::endl;
@@ -73,7 +83,6 @@ int main()
 
     while (*s < N)
     {
-        std::cout << "source = " << *s << std::endl;
         Q.submit([&](handler &h)
                  { h.parallel_for(
                        NUM_THREADS, [=](id<1> i)
@@ -98,16 +107,13 @@ int main()
         *done = 0;
         *position = 0;
         *finish_limit_position = 1;
-        dev_end_point[0] = 0;
+        ends[0] = 0;
 
         while (!*done)
         {
             *done = 1;
-            std::cout << "current depth" << *current_depth << std::endl;
             Q.submit([&](handler &h)
-                     { 
-                        stream out(1024, 256, h);
-                        h.parallel_for(
+                     { h.parallel_for(
                            NUM_THREADS, [=](id<1> i)
                            {
                            for (; i < N; i += stride)
@@ -115,8 +121,7 @@ int main()
                                if(dev_d[i] == *current_depth){
                                 atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*position);
                                 int t = atomic_data++;
-                                out<<"position  "<<t<<"  "<<*position<<endl;
-                                dev_rev_stack[t] = i;
+                                S[t] = i;
                                 for(int r = dev_I[i]; r < dev_I[i + 1]; r++){
                                     int w = dev_E[r];
                                     if(dev_d[w] == INT_MAX){
@@ -133,44 +138,44 @@ int main()
                            } }); })
                 .wait();
             *current_depth += 1;
-            dev_end_point[*finish_limit_position] = *position;
+            ends[*finish_limit_position] = *position;
             ++*finish_limit_position;
         }
-
         for (int itr1 = *finish_limit_position - 1; itr1 >= 0; itr1--)
         {
             Q.submit([&](handler &h)
                      { h.parallel_for(
                            NUM_THREADS, [=](id<1> i)
                            {
-                                    for(int itr2 = dev_end_point[itr1] + i; itr2 < dev_end_point[itr1 + 1]; itr2 += stride){
-                                        for(int itr3 = dev_I[dev_rev_stack[itr2]]; itr3 < dev_I[dev_rev_stack[itr2] + 1]; itr3++){
+                                    for(int itr2 = ends[itr1] + i; itr2 < ends[itr1 + 1]; itr2 += stride){
+                                        for(int itr3 = dev_I[S[itr2]]; itr3 < dev_I[S[itr2] + 1]; itr3++){
                                             int consider = dev_E[itr3];
-                                            if(dev_d[consider] == dev_d[dev_rev_stack[itr2]] + 1){
-                                                dev_delta[dev_rev_stack[itr2]] += (((float)dev_sigma[dev_rev_stack[itr2]] / dev_sigma[consider]) * ((float)1 + dev_delta[consider]));
+                                            if(dev_d[consider] == dev_d[S[itr2]] + 1){
+                                                dev_delta[S[itr2]] += (((float)dev_sigma[S[itr2]] / dev_sigma[consider]) * ((float)1 + dev_delta[consider]));
 
                                             }
                                         }
 
-                                        if(dev_rev_stack[itr2] != *s){
-                                            dev_bc[dev_rev_stack[itr2]] += dev_delta[dev_rev_stack[itr2]];
+                                        if(S[itr2] != *s){
+                                            dev_bc[S[itr2]] += dev_delta[S[itr2]];
                                         }
                                     } }); })
                 .wait();
         }
+        // serial implementation
         // for (int itr1 = N - 1; itr1 >= 0; --itr1)
         // {
-        //     for (int itr2 = I[dev_rev_stack[itr1]]; itr2 < I[dev_rev_stack[itr1] + 1]; ++itr2)
+        //     for (int itr2 = I[S[itr1]]; itr2 < I[S[itr1] + 1]; ++itr2)
         //     {
         //         int consider = E[itr2];
-        //         if (dev_d[consider] == dev_d[dev_rev_stack[itr1]] - 1)
+        //         if (dev_d[consider] == dev_d[S[itr1]] - 1)
         //         {
-        //             dev_delta[consider] += (((float)dev_sigma[consider] / dev_sigma[dev_rev_stack[itr1]]) * ((float)1 + dev_delta[dev_rev_stack[itr1]]));
+        //             dev_delta[consider] += (((float)dev_sigma[consider] / dev_sigma[S[itr1]]) * ((float)1 + dev_delta[S[itr1]]));
         //         }
         //     }
-        //     if (dev_rev_stack[itr1] != *s)
+        //     if (S[itr1] != *s)
         //     {
-        //         dev_bc[dev_rev_stack[itr1]] += dev_delta[dev_rev_stack[itr1]];
+        //         dev_bc[S[itr1]] += dev_delta[S[itr1]];
         //     }
         // }
         *s += 1;
