@@ -2,40 +2,37 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-#define NUM_THREADS 1048576
 
 using namespace sycl;
 
-int main()
+int main(int argc, char **argv)
 {
 
     std::chrono::steady_clock::time_point tic_0 = std::chrono::steady_clock::now();
-    std::string name = "simple";
-    // The default device selector will select the most performant device.
+    std::ofstream logfile;
+
+    std::string name = argv[1];
+    int source = atoi(argv[2]);
+    int NUM_THREADS = atoi(argv[3]);
+    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
+
+    logfile.open("single_source_shortest_path/output/" + name + "_sssp_dp_time_" + NUM_THREADS_STR + ".txt");
+
+    logfile << "Processing " << name << std::endl;
+
     default_selector d_selector;
     queue Q(d_selector);
-    std::cout << "Selected device: " << Q.get_device().get_info<info::device::name>() << "\n";
+    logfile << "Selected device: " << Q.get_device().get_info<info::device::name>() << std::endl;
+    logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
     std::vector<int> V, I, E, W;
-    load_from_file("input/" + name + "/V", V);
-    load_from_file("input/" + name + "/I", I);
-    load_from_file("input/" + name + "/E", E);
-    load_from_file("input/" + name + "/W", W);
+    load_from_file("csr_graphs/" + name + "/V", V);
+    load_from_file("csr_graphs/" + name + "/I", I);
+    load_from_file("csr_graphs/" + name + "/E", E);
+    load_from_file("csr_graphs/" + name + "/W", W);
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
-    std::cout << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    if (DEBUG)
-    {
-        std::cout << "Node: ";
-        print_vector(V);
-        std::cout << "Offset: ";
-        print_vector(I);
-        std::cout << "Edge: ";
-        print_vector(E);
-        std::cout << "Weight: ";
-        print_vector(W);
-    }
+    logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     int N = V.size();
     int stride = NUM_THREADS;
@@ -43,8 +40,8 @@ int main()
     std::vector<int> dist(N, INT_MAX);
     std::vector<int> dist_i(N, INT_MAX);
 
-    dist[0] = 0;
-    dist_i[0] = 0;
+    dist[source] = 0;
+    dist_i[source] = 0;
 
     {
         buffer<int> V_buf{V};
@@ -55,17 +52,17 @@ int main()
         buffer<int> dist_i_buf{dist_i};
 
         tic = std::chrono::steady_clock::now();
-
+        logfile << "Starting SSSP..." << std::endl;
         int *active_count = malloc_shared<int>(1, Q);
         int *wl = malloc_shared<int>(N, Q);
         *active_count = 1;
-        wl[0] = 0;
+        wl[0] = source;
 
         for (int round = 1; round < N; round++)
         {
-            std::cout << "Round num: " << round << std::endl;
             if (*active_count == 0)
             {
+                logfile << "Number of rounds required for convergence: " << round << std::endl;
                 break;
             }
             Q.submit([&](handler &h)
@@ -126,24 +123,29 @@ int main()
                 .wait();
         }
         toc = std::chrono::steady_clock::now();
-        std::cout << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+        logfile << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
     }
     tic = std::chrono::steady_clock::now();
-    std::ofstream myfile;
-
-    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/sssp_v402_result_" + NUM_THREADS_STR + ".txt");
+    std::ofstream resultfile;
+    int num_covered = 0;
+    resultfile.open("single_source_shortest_path/output/" + name + "_sssp_dp_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
-        myfile << i << " " << dist[i] << std::endl;
+        if (dist[i] != INT_MAX)
+        {
+            num_covered += 1;
+        }
+        resultfile << i << " " << dist[i] << std::endl;
     }
-    myfile.close();
+    resultfile.close();
     toc = std::chrono::steady_clock::now();
-    std::cout << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-    std::cout << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
+    logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
+    logfile << "Percentage coverage from given source: " << 100 * (1.0 * num_covered) / N << std::endl
+            << "Number of nodes covered: " << num_covered << std::endl;
 
     return 0;
 }
