@@ -53,15 +53,25 @@ int main(int argc, char **argv)
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting triangle count..." << std::endl;
-    int *triangle_count = malloc_shared<int>(1, Q);
-    *triangle_count = 0;
-
+    int triangle_count = 0;
+    logfile << "H1" << std::endl;
+    int *dev_triangle_count = malloc_device<int>(1, Q);
+    logfile << "H2" << std::endl;
     Q.submit([&](handler &h)
-             { h.parallel_for(
+             { h.memcpy(dev_triangle_count, &triangle_count, sizeof(int)); })
+        .wait();
+    logfile << "H3" << std::endl;
+    Q.submit([&](handler &h)
+             { 
+                sycl::stream out(1024, 256, h);
+                std::cout<<"INSIDE"<<std::endl;
+                h.parallel_for(
                    NUM_THREADS, [=](id<1> i)
                    {
+
                             for (; i < N; i += stride)
                             {
+                                // std::cout<<i<<std::endl;
                                 for (int edge1 = dev_I[i]; edge1 < dev_I[i + 1]; edge1++)
                                 {
                                     int u = dev_E[edge1];
@@ -74,15 +84,16 @@ int main(int argc, char **argv)
                                                 int start_edge =  dev_I[u]; 
                                                 int end_edge =  dev_I[u + 1] - 1; 
 
-                                                if(dev_E[start_edge] == w){
-                                                    nbrs_connected = 1;
-                                                }
-                                                else if(dev_E[end_edge] == 1){
-                                                    nbrs_connected = 1;
-                                                }
-                                                else
-                                                {    while(start_edge <= end_edge){
-                                                        int mid = start_edge + (end_edge - start_edge)/2;
+                                                // if(dev_E[start_edge] == w){
+                                                //     nbrs_connected = 1;
+                                                // }
+                                                // else if(dev_E[end_edge] == 1){
+                                                //     nbrs_connected = 1;
+                                                // }
+                                                // else
+                                                // {   	
+                                                    int mid = start_edge + (end_edge - start_edge)/2;
+                                                    while(start_edge <= end_edge){
                                                         if(dev_E[mid] == w){
                                                             nbrs_connected = 1;
                                                             break;
@@ -90,17 +101,18 @@ int main(int argc, char **argv)
                                                         if(w < dev_E[mid]){
                                                             end_edge = mid - 1;
                                                         }
-                                                        if (w > dev_E[mid])
+                                                        else
                                                         {
                                                             start_edge = mid + 1;
                                                         }
+                                                        mid = start_edge + (end_edge - start_edge)/2;
                                                     }
-                                                }
+                                                // }
                             
                                                 }
-                                                if(nbrs_connected){
-                                                    atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*triangle_count);
-                                                    atomic_data++;
+                                                 if(nbrs_connected){
+                                                     atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*dev_triangle_count);
+                                                     atomic_data+=1;
                                                 }
                                             }
                                         }
@@ -111,14 +123,17 @@ int main(int argc, char **argv)
     toc = std::chrono::steady_clock::now();
     logfile << "Time to run triangle count: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
+    Q.submit([&](handler &h)
+             { h.memcpy(&triangle_count, dev_triangle_count, sizeof(int)); })
+        .wait();
     tic = std::chrono::steady_clock::now();
-    std::ofstream myfile;
+    std::ofstream resultfile;
 
-    myfile.open("triangle_count/output/" + name + "_tc_bs_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("triangle_count/output/" + name + "_tc_bs_result_" + NUM_THREADS_STR + ".txt");
 
-    myfile << "Number of triangles in graph =  " << *triangle_count << std::endl;
+    resultfile << "Number of triangles in graph =  " << triangle_count << std::endl;
 
-    myfile.close();
+    resultfile.close();
     toc = std::chrono::steady_clock::now();
     logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
