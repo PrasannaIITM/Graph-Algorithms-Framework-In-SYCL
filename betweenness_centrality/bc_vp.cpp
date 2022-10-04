@@ -13,6 +13,12 @@ int main(int argc, char **argv)
 
     std::string name = argv[1];
     int NUM_THREADS = atoi(argv[2]);
+    int sSize = atoi(argv[3]);
+    std::vector<int> sourceSet;
+    for (int i = 4; i < sSize + 4; i++)
+    {
+        sourceSet.push_back(atoi(argv[i]));
+    }
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
     logfile.open("betweenness_centrality/output/" + name + "_bc_vp_time_" + NUM_THREADS_STR + ".txt");
@@ -78,8 +84,9 @@ int main(int argc, char **argv)
     int *done = malloc_shared<int>(1, Q);
     int *current_depth = malloc_shared<int>(1, Q);
 
-    while (*s < N)
+    for (auto x : sourceSet)
     {
+        *s = x;
         Q.submit([&](handler &h)
                  { h.parallel_for(
                        NUM_THREADS, [=](id<1> i)
@@ -175,7 +182,6 @@ int main(int argc, char **argv)
         //         dev_bc[S[itr1]] += dev_delta[S[itr1]];
         //     }
         // }
-        *s += 1;
     }
 
     toc = std::chrono::steady_clock::now();
@@ -192,7 +198,7 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < N; i++)
     {
-        resultfile << i << " " << int(bc[i] / 2.0) << std::endl;
+        resultfile << i << " " << bc[i] / 2.0 << std::endl;
     }
     resultfile.close();
     toc = std::chrono::steady_clock::now();
