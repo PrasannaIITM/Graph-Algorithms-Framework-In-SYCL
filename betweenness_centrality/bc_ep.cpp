@@ -2,39 +2,36 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-#define NUM_THREADS 4
 
 using namespace sycl;
 
-int main()
+int main(int argc, char **argv)
 {
 
     std::chrono::steady_clock::time_point tic_0 = std::chrono::steady_clock::now();
-    std::string name = "simplebcud";
-    std::cout << "Processing " << name << std::endl;
-    // The default device selector will select the most performant device.
+    std::ofstream logfile;
+
+    std::string name = argv[1];
+    int NUM_THREADS = atoi(argv[2]);
+    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
+
+    logfile.open("betweenness_centrality/output/" + name + "_bc_ep_time_" + NUM_THREADS_STR + ".txt");
+
+    logfile << "Processing " << name << std::endl;
     default_selector d_selector;
     queue Q(d_selector);
-    std::cout << "Selected device: " << Q.get_device().get_info<info::device::name>() << "\n";
+    logfile << "Selected device: " << Q.get_device().get_info<info::device::name>() << std::endl;
+    logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
     std::vector<int> V, I, E, RE, RI;
-    load_from_file("input/" + name + "/V", V);
-    load_from_file("input/" + name + "/I", I);
-    load_from_file("input/" + name + "/E", E);
+    load_from_file("csr_graphs/" + name + "/V", V);
+    load_from_file("csr_graphs/" + name + "/I", I);
+    load_from_file("csr_graphs/" + name + "/E", E);
 
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
-    std::cout << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    if (DEBUG)
-    {
-        std::cout << "Node: ";
-        print_vector(V);
-        std::cout << "Offset: ";
-        print_vector(I);
-        std::cout << "Edge: ";
-        print_vector(E);
-    }
     int N = V.size();
     int stride = NUM_THREADS;
 
@@ -70,7 +67,7 @@ int main()
         .wait();
 
     tic = std::chrono::steady_clock::now();
-    std::cout << "Starting betweenness centrality calculation..." << std::endl;
+    logfile << "Starting betweenness centrality calculation..." << std::endl;
 
     int *s = malloc_shared<int>(1, Q);
     *s = 0;
@@ -200,27 +197,28 @@ int main()
         *s += 1;
     }
 
-    std::cout << std::endl;
+    logfile << std::endl;
     toc = std::chrono::steady_clock::now();
-    std::cout << "Time to run betweenness centrality: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    logfile << "Time to run betweenness centrality: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     Q.submit([&](handler &h)
              { h.memcpy(&bc[0], dev_bc, N * sizeof(float)); })
         .wait();
 
-    std::ofstream myfile;
-    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
-    myfile.open("output/" + name + "/bc_v2_result_" + NUM_THREADS_STR + ".txt");
+    tic = std::chrono::steady_clock::now();
+    std::ofstream resultfile;
+
+    resultfile.open("betweenness_centrality/output/" + name + "_bc_ep_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
-        myfile << i << " " << int(bc[i] / 2.0) << std::endl;
+        resultfile << i << " " << int(bc[i] / 2.0) << std::endl;
     }
-    myfile.close();
+    resultfile.close();
     toc = std::chrono::steady_clock::now();
-    std::cout << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-    std::cout << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
+    logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
     return 0;
 }
