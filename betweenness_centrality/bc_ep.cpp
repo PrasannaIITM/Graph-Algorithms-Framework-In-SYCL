@@ -189,8 +189,9 @@ int main(int argc, char **argv)
                                    int v = dev_E[r];
                                    if (dev_d[v] == dev_d[w] + 1)
                                    {
-                                       atomic_ref<float, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
-                                       atomic_data += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
+                                    //    atomic_ref<float, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
+                                    //    atomic_data += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
+                                       dev_delta[w] += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
                                    }
                                }
                                if (w != *s)
