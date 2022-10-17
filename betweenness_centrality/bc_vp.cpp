@@ -7,21 +7,26 @@ using namespace sycl;
 
 int main(int argc, char **argv)
 {
-
     std::chrono::steady_clock::time_point tic_0 = std::chrono::steady_clock::now();
     std::ofstream logfile;
 
     std::string name = argv[1];
     int NUM_THREADS = atoi(argv[2]);
     int sSize = atoi(argv[3]);
+    std::string str_sSize = std::to_string(sSize);
     std::vector<int> sourceSet;
-    for (int i = 4; i < sSize + 4; i++)
+
+    std::ifstream input("betweenness_centrality/sources/" + name + "/" + str_sSize);
+    int num;
+    while ((input >> num))
     {
-        sourceSet.push_back(atoi(argv[i]));
+        sourceSet.push_back(num);
     }
+    input.close();
+
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    logfile.open("betweenness_centrality/output/" + name + "_bc_vp_time_" + NUM_THREADS_STR + ".txt");
+    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
     default_selector d_selector;
@@ -123,7 +128,7 @@ int main(int argc, char **argv)
                            for (; i < N; i += stride)
                            {
                                if(dev_d[i] == *current_depth){
-                                atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*position);
+                                atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(*position);
                                 int t = atomic_data++;
                                 S[t] = i;
                                 for(int r = dev_I[i]; r < dev_I[i + 1]; r++){
@@ -134,7 +139,7 @@ int main(int argc, char **argv)
                                     }
 
                                     if(dev_d[w] == (dev_d[i] + 1)){
-                                        atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_sigma[w]);
+                                        atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(dev_sigma[w]);
                                         atomic_data += dev_sigma[i];
                                     } 
                                 }
@@ -194,7 +199,7 @@ int main(int argc, char **argv)
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
 
-    resultfile.open("betweenness_centrality/output/" + name + "_bc_vp_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {

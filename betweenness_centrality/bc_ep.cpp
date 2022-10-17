@@ -13,15 +13,21 @@ int main(int argc, char **argv)
 
     std::string name = argv[1];
     int NUM_THREADS = atoi(argv[2]);
-    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
     int sSize = atoi(argv[3]);
+    std::string str_sSize = std::to_string(sSize);
     std::vector<int> sourceSet;
-    for (int i = 4; i < sSize + 4; i++)
-    {
-        sourceSet.push_back(atoi(argv[i]));
-    }
 
-    logfile.open("betweenness_centrality/output/" + name + "_bc_ep_time_" + NUM_THREADS_STR + ".txt");
+    std::ifstream input("betweenness_centrality/sources/" + name + "/" + str_sSize);
+    int num;
+    while ((input >> num))
+    {
+        sourceSet.push_back(num);
+    }
+    input.close();
+
+    std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
+
+    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_ep_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
     default_selector d_selector;
@@ -134,18 +140,18 @@ int main(int argc, char **argv)
                                for (int r = dev_I[v]; r < dev_I[v + 1]; r++){
                                    int w = dev_E[r];
 
-                                    atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_d[w]);
+                                    atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(dev_d[w]);
                                     int old = INT_MAX;
                                     old = atomic_data.compare_exchange_strong(old, dev_d[v] + 1);
                                     if(old){
-                                        atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*q_next_len);
+                                        atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(*q_next_len);
                                         int t = atomic_data++;
                                         q_next[t] = w;
                                     }
                                    
 
                                    if(dev_d[w] == dev_d[v] + 1){
-                                       atomic_ref<int, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_sigma[w]);
+                                       atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space> atomic_data(dev_sigma[w]);
                                        atomic_data += dev_sigma[v];
                                    }
 
@@ -189,7 +195,7 @@ int main(int argc, char **argv)
                                    int v = dev_E[r];
                                    if (dev_d[v] == dev_d[w] + 1)
                                    {
-                                    //    atomic_ref<float, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
+                                    //    atomic_ref<float, memory_order::relaxed, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
                                     //    atomic_data += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
                                        dev_delta[w] += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
                                    }
@@ -215,7 +221,7 @@ int main(int argc, char **argv)
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
 
-    resultfile.open("betweenness_centrality/output/" + name + "_bc_ep_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_ep_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
