@@ -47,7 +47,8 @@ int main(int argc, char **argv)
     int *d_comp_min_edge = malloc_device<int>(n_vertices, Q);
     int *d_edge_in_mst = malloc_device<int>(n_edges, Q);
 
-    bool *single_comp = malloc_shared<bool>(1, Q);
+    bool *rem_comp = malloc_shared<bool>(1, Q);
+    int *counter = malloc_shared<int>(1, Q);
     bool *found_min_edge = malloc_shared<bool>(1, Q);
     bool *parents_updated = malloc_shared<bool>(1, Q);
 
@@ -79,18 +80,20 @@ int main(int argc, char **argv)
                    {
                                for (; i < n_vertices ;i += stride)
                                {
-                                    d_parent[i] = i;
+                                    d_parent[i] = d_V[i];
                                } }); })
         .wait();
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting minimum spanning tree calculation..." << std::endl;
 
-    *single_comp = false;
+    *rem_comp = false;
+    *counter = 0;
 
-    while (!*single_comp)
+    while (!*rem_comp)
     {
-        *single_comp = true;
+        // logfile<<"HERE 0"<<std::endl;
+        *rem_comp = true;
         Q.submit([&](handler &h)
                  { h.parallel_for(
                        NUM_THREADS, [=](id<1> i)
@@ -122,6 +125,7 @@ int main(int argc, char **argv)
                                             { 
                                                 int curr_neigh = d_E[curr_min_edge];
                                                 if (d_W[edge] < d_W[curr_min_edge] || (d_W[edge] == d_W[curr_min_edge] && d_parent[v] < d_parent[curr_neigh]))
+                                                // if (d_W[edge] < d_W[curr_min_edge])
                                                 { 
                                                     d_local_min_edge[u] = edge;
                                                 } 
@@ -130,7 +134,7 @@ int main(int argc, char **argv)
                                    }
                                } }); })
             .wait();
-
+        // logfile<<"HERE 1"<<std::endl;
         // find the minimum edge from the component
         *found_min_edge = false;
         while (!*found_min_edge)
@@ -160,7 +164,7 @@ int main(int argc, char **argv)
                                         else
                                         {
                                             int curr_min_neigh = d_E[comp_min_edge];
-                                            if (d_W[my_min_edge] < d_W[comp_min_edge] || (d_W[my_min_edge] == d_W[comp_min_edge] && d_parent[v] < d_parent[curr_min_neigh]))
+                                             if (d_W[my_min_edge] < d_W[comp_min_edge] || (d_W[my_min_edge] == d_W[comp_min_edge] && d_parent[v] < d_parent[curr_min_neigh]))
                                             {
                                                 d_comp_min_edge[my_comp] = my_min_edge;
                                                 *found_min_edge = false;
@@ -172,7 +176,7 @@ int main(int argc, char **argv)
                                } }); })
                 .wait();
         }
-
+        // logfile<<"HERE 2"<<std::endl;
         // remove cycles of 2 nodes
         Q.submit([&](handler &h)
                  { h.parallel_for(
@@ -197,7 +201,7 @@ int main(int argc, char **argv)
                                                 int w = d_E[v_comp_min_edge];
                                                 if (d_parent[u] == d_parent[w] && d_parent[u] < d_parent[v])
                                                 { 
-                                                    d_comp_min_edge[parent_v] = -1;
+                                                    d_comp_min_edge[d_parent[v]] = -1;
 
                                                 } 
 
@@ -207,7 +211,7 @@ int main(int argc, char **argv)
                                     }
                                } }); })
             .wait();
-
+        // logfile<<"HERE 3"<<std::endl;
         // update the MST edges
         Q.submit([&](handler &h)
                  { h.parallel_for(
@@ -222,12 +226,15 @@ int main(int argc, char **argv)
                                        if (curr_comp_min_edge != -1)
                                        {
                                            d_edge_in_mst[curr_comp_min_edge] = 1;
+                                           atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(*counter);
+                                           atomic_data+=1;
                                        } 
 
                                     } 
                                } }); })
             .wait();
-
+        logfile << "Num Edges: " << *counter << std::endl;
+        // logfile<<"HERE 4"<<std::endl;
         // update parents
         Q.submit([&](handler &h)
                  { h.parallel_for(
@@ -241,7 +248,7 @@ int main(int argc, char **argv)
                                        int curr_comp_min_edge = d_comp_min_edge[u];
                                        if (curr_comp_min_edge != -1)
                                        {
-                                           *single_comp = false;
+                                           *rem_comp = false;
                                            int v = d_E[curr_comp_min_edge];
                                            d_parent[u] = d_parent[v];
                                        } 
@@ -249,7 +256,7 @@ int main(int argc, char **argv)
                                     } 
                                } }); })
             .wait();
-
+        // logfile<<"HERE 5"<<std::endl;
         // flatten parents
         *parents_updated = false;
         while (!*parents_updated)
@@ -265,39 +272,38 @@ int main(int argc, char **argv)
                                     int parent_parent_u = d_parent[parent_u];
 
                                     if (parent_u != parent_parent_u)
-                                    { 
+                                    {   
                                         *parents_updated = false;
                                         d_parent[u] = parent_parent_u;
                                     }
                                } }); })
                 .wait();
         }
+        toc = std::chrono::steady_clock::now();
+        logfile << "Time to run minimum spanning tree: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+
+        tic = std::chrono::steady_clock::now();
+        std::ofstream resultfile;
+
+        resultfile.open("min_spanning_tree/output/" + name + "_mst_vb_result_" + NUM_THREADS_STR + ".txt");
+
+        std::vector<int> op(n_edges);
+        Q.submit([&](handler &h)
+                 { h.memcpy(&op[0], d_edge_in_mst, n_edges * sizeof(int)); })
+            .wait();
+        int count = 0;
+        for (int i = 0; i < n_edges; i++)
+        {
+            if (op[i] == 1)
+                count++;
+            resultfile << i << " " << op[i] << std::endl;
+        }
+        resultfile << "Num edges included in MST: " << count << " Total nodes in graph: " << n_vertices << std::endl;
+        resultfile.close();
+        toc = std::chrono::steady_clock::now();
+        logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+
+        std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
+        logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
+        return 0;
     }
-    toc = std::chrono::steady_clock::now();
-    logfile << "Time to run minimum spanning tree: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    tic = std::chrono::steady_clock::now();
-    std::ofstream resultfile;
-
-    resultfile.open("min_spanning_tree/output/" + name + "_mst_vb_result_" + NUM_THREADS_STR + ".txt");
-
-    std::vector<int> op(n_edges);
-    Q.submit([&](handler &h)
-             { h.memcpy(&op[0], d_edge_in_mst, n_edges * sizeof(int)); })
-        .wait();
-    int count = 0;
-    for (int i = 0; i < n_edges; i++)
-    {
-        if (op[i] == 1)
-            count++;
-        resultfile << i << " " << op[i] << std::endl;
-    }
-    resultfile << "Num edges included in MST: " << count << " Total nodes in graph: " << n_vertices << std::endl;
-    resultfile.close();
-    toc = std::chrono::steady_clock::now();
-    logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-    logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
-    return 0;
-}
