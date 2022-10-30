@@ -17,7 +17,7 @@ int main(int argc, char **argv)
     int NUM_THREADS = atoi(argv[3]);
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    logfile.open("single_source_shortest_path/output/" + name + "_sssp_top_f_time_" + NUM_THREADS_STR + ".txt");
+    logfile.open("single_source_shortest_path/output/" + name + "_sssp_top_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
 
@@ -108,7 +108,7 @@ int main(int argc, char **argv)
 
     memcpy(&dist[0], dev_dist, N, Q);
 
-    resultfile.open("single_source_shortest_path/output/" + name + "_sssp_top_f_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("single_source_shortest_path/output/" + name + "_sssp_top_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
