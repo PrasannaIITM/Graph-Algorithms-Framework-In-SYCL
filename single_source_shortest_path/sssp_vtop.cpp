@@ -61,30 +61,32 @@ int main(int argc, char **argv)
         }
         *early_stop = 1;
 
-        forall(NUM_THREADS)
+        forall(N, NUM_THREADS)
         {
             if (dev_flag[u])
             {
                 dev_flag[u] = 0;
                 for_neighbours(u)
                 {
-                    int du = dev_dist[u];
-                    int dv = dev_dist[v];
+                    int v = get_neighbour(j);
+                    int w = get_weight(j);
 
+                    int du = dev_dist[u];
+                    int dv = dev_dist[g->E[j]];
                     int new_dist = du + w;
 
                     if (du == INT_MAX)
                     {
                         continue;
                     }
-                    ATOMIC atomic_data(dev_dist_i[g->E[j]]);
+                    ATOMIC atomic_data(dev_dist_i[v]);
                     atomic_data.fetch_min(new_dist);
                 }
             }
         }
         end
 
-        forall(NUM_THREADS)
+        forall(N, NUM_THREADS)
         {
             if (dev_dist[u] > dev_dist_i[u])
             {

@@ -12,9 +12,14 @@
 using namespace sycl;
 
 #define ATOMIC atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
-#define for_neighbours(u) for (int j = g->I[u], v = g->E[j], w = g->W[j]; j < g->I[u + 1]; j++)
 
-#define forall(NUM_THREADS) Q.submit([&](handler &h){ h.parallel_for(NUM_THREADS, [=](id<1> u){for (; u < N; u += NUM_THREADS)
+#define get_neighbour(j) g->E[j]
+#define get_weight(j) g->W[j]
+#define begin_neighbours(u) g->I[u]
+#define end_neighbours(u) g->I[u + 1]
+#define for_neighbours(u) for (int j = begin_neighbours(u); j < end_neighbours(u); j++)
+
+#define forall(N, NUM_THREADS) Q.submit([&](handler &h){ h.parallel_for(NUM_THREADS, [=](id<1> u){for (; u < N; u += NUM_THREADS)
 #define end \
     });     \
     }).wait();
