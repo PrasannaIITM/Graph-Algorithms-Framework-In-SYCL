@@ -137,8 +137,42 @@ void memcpy(T *dest, T *src, int N, queue Q)
         .wait();
 }
 
-// TODO: returns True if u and v are neighbours
-bool neighbours(int u, int v)
+// returns True if u and v are neighbours
+int neighbours(int v, int w, graph *g)
 {
-    return false;
+    int connected = 0;
+    int start_edge = begin_neighbours(v);
+    int end_edge = end_neighbours(v) - 1;
+
+    if (get_neighbour(start_edge) == w)
+    {
+        connected = 1;
+    }
+    else if (get_neighbour(end_edge) == w)
+    {
+        connected = 1;
+    }
+    else
+    {
+        int mid = start_edge + (end_edge - start_edge) / 2;
+        while (start_edge <= end_edge)
+        {
+            if (get_neighbour(mid) == w)
+            {
+                connected = 1;
+                break;
+            }
+            if (w < get_neighbour(mid))
+            {
+                end_edge = mid - 1;
+            }
+            else
+            {
+                start_edge = mid + 1;
+            }
+            mid = start_edge + (end_edge - start_edge) / 2;
+        }
+    }
+
+    return connected;
 }

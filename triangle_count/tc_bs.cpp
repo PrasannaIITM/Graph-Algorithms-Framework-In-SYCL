@@ -16,7 +16,7 @@ int main(int argc, char **argv)
     int NUM_THREADS = atoi(argv[2]);
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    logfile.open("triangle_count/output/" + name + "_tc_bs_f_time_" + NUM_THREADS_STR + ".txt");
+    logfile.open("triangle_count/output/" + name + "_tc_bs_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
 
@@ -58,39 +58,7 @@ int main(int argc, char **argv)
                     int nbrs_connected = 0;
                     if (w > u)
                     {
-
-                        int start_edge = g->I[v];
-                        int end_edge = g->I[v + 1] - 1;
-
-                        if (g->E[start_edge] == w)
-                        {
-                            nbrs_connected = 1;
-                        }
-                        else if (g->E[end_edge] == 1)
-                        {
-                            nbrs_connected = 1;
-                        }
-                        else
-                        {
-                            int mid = start_edge + (end_edge - start_edge) / 2;
-                            while (start_edge <= end_edge)
-                            {
-                                if (g->E[mid] == w)
-                                {
-                                    nbrs_connected = 1;
-                                    break;
-                                }
-                                if (w < g->E[mid])
-                                {
-                                    end_edge = mid - 1;
-                                }
-                                else
-                                {
-                                    start_edge = mid + 1;
-                                }
-                                mid = start_edge + (end_edge - start_edge) / 2;
-                            }
-                        }
+                        nbrs_connected = neighbours(v, w, g);
                     }
                     if (nbrs_connected)
                     {
@@ -111,7 +79,7 @@ int main(int argc, char **argv)
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
 
-    resultfile.open("triangle_count/output/" + name + "_tc_bs_f_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("triangle_count/output/" + name + "_tc_bs_result_" + NUM_THREADS_STR + ".txt");
 
     resultfile << "Number of triangles in graph =  " << triangle_count << std::endl;
 
