@@ -17,7 +17,7 @@ using namespace sycl;
 #define get_weight(j) g->W[j]
 #define begin_neighbours(u) g->I[u]
 #define end_neighbours(u) g->I[u + 1]
-#define for_neighbours(u) for (int j = begin_neighbours(u); j < end_neighbours(u); j++)
+#define for_neighbours(u, j) for (j = begin_neighbours(u); j < end_neighbours(u); j++)
 
 #define forall(N, NUM_THREADS) Q.submit([&](handler &h){ h.parallel_for(NUM_THREADS, [=](id<1> u){for (; u < N; u += NUM_THREADS)
 #define end \

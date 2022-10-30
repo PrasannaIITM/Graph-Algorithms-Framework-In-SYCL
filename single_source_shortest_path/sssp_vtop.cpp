@@ -66,13 +66,14 @@ int main(int argc, char **argv)
             if (dev_flag[u])
             {
                 dev_flag[u] = 0;
-                for_neighbours(u)
+                int u_itr;
+                for_neighbours(u, u_itr)
                 {
-                    int v = get_neighbour(j);
-                    int w = get_weight(j);
+                    int v = get_neighbour(u_itr);
+                    int w = get_weight(u_itr);
 
                     int du = dev_dist[u];
-                    int dv = dev_dist[g->E[j]];
+                    int dv = dev_dist[v];
                     int new_dist = du + w;
 
                     if (du == INT_MAX)
