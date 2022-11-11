@@ -84,9 +84,7 @@ int main(int argc, char **argv)
     std::ofstream resultfile;
     int num_covered = 0;
 
-    Q.submit([&](handler &h)
-             { h.memcpy(&pagerank[0], dev_pagerank, N * sizeof(float)); })
-        .wait();
+    memcpy(&pagerank[0], dev_pagerank, N, Q);
 
     resultfile.open("pagerank/output/" + name + "_pr_pull_result_" + NUM_THREADS_STR + ".txt");
 
