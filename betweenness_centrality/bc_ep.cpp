@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
+#include "../graph.h"
 
 using namespace sycl;
 
@@ -36,47 +37,21 @@ int main(int argc, char **argv)
     logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
-    std::vector<int> V, I, E, RE, RI;
-    load_from_file("csr_graphs/" + name + "/V", V);
-    load_from_file("csr_graphs/" + name + "/I", I);
-    load_from_file("csr_graphs/" + name + "/E", E);
-
+    graph *g = malloc_shared<graph>(1, Q);
+    g->load_graph(name, Q);
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
     logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    int N = V.size();
+    int N = g->get_num_nodes();
     int stride = NUM_THREADS;
 
     std::vector<float> bc(N);
 
-    int *dev_V = malloc_device<int>(V.size(), Q);
-    int *dev_I = malloc_device<int>(I.size(), Q);
-    int *dev_E = malloc_device<int>(E.size(), Q);
-    int *dev_d = malloc_shared<int>(N, Q);
-    int *dev_sigma = malloc_shared<int>(N, Q);
-    float *dev_bc = malloc_shared<float>(bc.size(), Q);
-    float *dev_delta = malloc_shared<float>(N, Q);
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_V, &V[0], V.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_I, &I[0], I.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_E, &E[0], E.size() * sizeof(int)); });
-
-    Q.wait();
-
-    Q.submit([&](handler &h)
-             { h.parallel_for(
-                   NUM_THREADS, [=](id<1> v)
-                   {
-                           for (; v < N; v += stride)
-                           {
-                               dev_bc[v] = 0;
-                           } }); })
-        .wait();
+    int *dev_d = malloc_device<int>(N, Q);
+    int *dev_sigma = malloc_device<int>(N, Q);
+    float *dev_bc = malloc_device<float>(bc.size(), Q);
+    initialize(dev_bc, float(0), NUM_THREADS, N, Q);
+    float *dev_delta = malloc_device<float>(N, Q);
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting betweenness centrality calculation..." << std::endl;
@@ -100,25 +75,10 @@ int main(int argc, char **argv)
     for (auto x : sourceSet)
     {
         *s = x;
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> v)
-                       {
-                           for (; v < N; v += stride)
-                           {
-                               if (v == *s)
-                               {
-                                   dev_d[v] = 0;
-                                   dev_sigma[v] = 1;
-                               }
-                               else
-                               {
-                                   dev_d[v] = INT_MAX;
-                                   dev_sigma[v] = 0;
-                               }
-                               dev_delta[v] = 0;
-                           } }); })
-            .wait();
+
+        initialize(dev_d, INT_MAX, NUM_THREADS, N, Q, *s, 0);
+        initialize(dev_sigma, 0, NUM_THREADS, N, Q, *s, 1);
+        initialize(dev_delta, float(0), NUM_THREADS, N, Q);
 
         q_curr[0] = *s;
         *q_curr_len = 1;
@@ -132,31 +92,31 @@ int main(int argc, char **argv)
 
         while (1)
         {
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           *q_curr_len, [=](id<1> i)
-                           {
-                               int v = q_curr[i];
-                               for (int r = dev_I[v]; r < dev_I[v + 1]; r++){
-                                   int w = dev_E[r];
+            forall(*q_curr_len, NUM_THREADS)
+            {
+                int v = q_curr[u], v_itr;
+                for_neighbours(v, v_itr)
+                {
+                    int w = get_neighbour(v_itr);
 
-                                    atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(dev_d[w]);
-                                    int old = INT_MAX;
-                                    old = atomic_data.compare_exchange_strong(old, dev_d[v] + 1);
-                                    if(old){
-                                        atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(*q_next_len);
-                                        int t = atomic_data++;
-                                        q_next[t] = w;
-                                    }
-                                   
+                    ATOMIC_INT atomic_data(dev_d[w]);
+                    int old = INT_MAX;
+                    old = atomic_data.compare_exchange_strong(old, dev_d[v] + 1);
+                    if (old)
+                    {
+                        ATOMIC_INT atomic_data(*q_next_len);
+                        int t = atomic_data++;
+                        q_next[t] = w;
+                    }
 
-                                   if(dev_d[w] == dev_d[v] + 1){
-                                       atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space> atomic_data(dev_sigma[w]);
-                                       atomic_data += dev_sigma[v];
-                                   }
-
-                               } }); })
-                .wait();
+                    if (dev_d[w] == dev_d[v] + 1)
+                    {
+                        ATOMIC_INT atomic_data(dev_sigma[w]);
+                        atomic_data += dev_sigma[v];
+                    }
+                }
+            }
+            end;
 
             if (*q_next_len == 0)
             {
@@ -164,13 +124,12 @@ int main(int argc, char **argv)
             }
             else
             {
-                Q.submit([&](handler &h)
-                         { h.parallel_for(
-                               *q_next_len, [=](id<1> i)
-                               {
-                                   q_curr[i] = q_next[i];
-                                   S[i + *S_len] = q_next[i]; }); })
-                    .wait();
+                forall(*q_next_len, NUM_THREADS)
+                {
+                    q_curr[u] = q_next[u];
+                    S[u + *S_len] = q_next[u];
+                }
+                end;
 
                 ends[*ends_len] = ends[*ends_len - 1] + *q_next_len;
                 *ends_len += 1;
@@ -183,28 +142,25 @@ int main(int argc, char **argv)
         }
         while (*depth >= 0)
         {
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           ends[*depth + 1] - ends[*depth], [=](id<1> i)
-                           {
-                               int tid = i + ends[*depth];
-                               int w = S[tid];
-                               int dsw = 0;
-                               for (int r = dev_I[w]; r < dev_I[w + 1]; r++)
-                               {
-                                   int v = dev_E[r];
-                                   if (dev_d[v] == dev_d[w] + 1)
-                                   {
-                                    //    atomic_ref<float, memory_order::relaxed, memory_scope::device, access::address_space::global_space> atomic_data(dev_delta[w]);
-                                    //    atomic_data += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
-                                       dev_delta[w] += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
-                                   }
-                               }
-                               if (w != *s)
-                               {
-                                   dev_bc[w] += dev_delta[w];
-                               } }); })
-                .wait();
+            forall(ends[*depth + 1] - ends[*depth], NUM_THREADS)
+            {
+                int tid = u + ends[*depth];
+                int w = S[tid];
+                int dsw = 0, r;
+                for_neighbours(w, r)
+                {
+                    int v = get_neighbour(r);
+                    if (dev_d[v] == dev_d[w] + 1)
+                    {
+                        dev_delta[w] += (((float)dev_sigma[w] / dev_sigma[v]) * ((float)1 + dev_delta[v]));
+                    }
+                }
+                if (w != *s)
+                {
+                    dev_bc[w] += dev_delta[w];
+                }
+            }
+            end;
 
             *depth -= 1;
         }
@@ -214,9 +170,7 @@ int main(int argc, char **argv)
     toc = std::chrono::steady_clock::now();
     logfile << "Time to run betweenness centrality: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    Q.submit([&](handler &h)
-             { h.memcpy(&bc[0], dev_bc, N * sizeof(float)); })
-        .wait();
+    memcpy(&bc[0], dev_bc, N, Q);
 
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
