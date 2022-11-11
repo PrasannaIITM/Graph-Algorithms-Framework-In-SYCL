@@ -80,12 +80,12 @@ int main(int argc, char **argv)
                     {
                         continue;
                     }
-                    ATOMIC atomic_data(dev_dist_i[v]);
+                    ATOMIC_INT atomic_data(dev_dist_i[v]);
                     atomic_data.fetch_min(new_dist);
                 }
             }
         }
-        end
+        end;
 
         forall(N, NUM_THREADS)
         {
@@ -97,7 +97,7 @@ int main(int argc, char **argv)
             }
             dev_dist_i[u] = dev_dist[u];
         }
-        end
+        end;
     }
 
     toc = std::chrono::steady_clock::now();

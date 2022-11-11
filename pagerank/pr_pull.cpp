@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
+#include "../graph.h"
 
 using namespace sycl;
 
@@ -25,53 +26,24 @@ int main(int argc, char **argv)
     logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
-    std::vector<int> V, I, E, RE, RI;
-    load_from_file("csr_graphs/" + name + "/V", V);
-    load_from_file("csr_graphs/" + name + "/I", I);
-    load_from_file("csr_graphs/" + name + "/RE", RE);
-    load_from_file("csr_graphs/" + name + "/RI", RI);
+    graph *g = malloc_shared<graph>(1, Q);
+    g->load_graph(name, Q);
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
     logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-    int *dev_V = malloc_device<int>(V.size(), Q);
-    int *dev_I = malloc_device<int>(I.size(), Q);
-    int *dev_RE = malloc_device<int>(RE.size(), Q);
-    int *dev_RI = malloc_device<int>(RI.size(), Q);
 
     float beta = 0.001;
     int maxIter = 100;
     float delta = 0.85;
 
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_V, &V[0], V.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_I, &I[0], I.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_RE, &RE[0], RE.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_RI, &RI[0], RI.size() * sizeof(int)); });
-
-    Q.wait();
-
-    int N = V.size();
+    int N = g->get_num_nodes();
     int stride = NUM_THREADS;
+
     std::vector<float> pagerank(N);
     float *dev_pagerank = malloc_device<float>(N, Q);
+    initialize(dev_pagerank, float(1 / N), NUM_THREADS, N, Q);
+
     float *dev_pagerank_i = malloc_device<float>(N, Q);
-
-    Q.submit([&](handler &h)
-             { h.parallel_for(NUM_THREADS, [=](id<1> i)
-                              {
-                                  for (; i < N; i += stride)
-                                  {
-                                      dev_pagerank[i] = 1/N;
-                                      dev_pagerank_i[i] = 1/N;
-
-                                  } }); });
-    Q.wait();
+    initialize(dev_pagerank_i, float(1 / N), NUM_THREADS, N, Q);
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting Pagerank..." << std::endl;
@@ -79,34 +51,29 @@ int main(int argc, char **argv)
     int iterCount = 0;
     do
     {
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
-                       {
-                               for (; i < N; i += stride)
-                               {
-                                   float sum = 0;
-                                   //pull
-                                   for (int edge = dev_RI[i]; edge < dev_RI[i + 1]; edge++){ 
-                                       int nbr = dev_RE[edge];
-                                       sum = sum + dev_pagerank[nbr] / (dev_I[nbr + 1] - dev_I[nbr]);
-                                   }
-                                   float val = (1 - delta) / N + delta * sum;
-                                   atomic_ref<float, memory_order::seq_cst, memory_scope::device, access::address_space::global_space> atomic_data(*diff);
-                                   atomic_data += (float)val - dev_pagerank[i];
-                                   dev_pagerank_i[i] = val;
-                               } }); })
-            .wait();
+        forall(N, NUM_THREADS)
+        {
+            float sum = 0;
+            // pull
+            int u_itr;
+            for_parents(u, u_itr)
+            {
+                int nbr = get_parent(u_itr);
+                sum = sum + dev_pagerank[nbr] / (get_num_neighbours(nbr));
+            }
+            float val = (1 - delta) / N + delta * sum;
+            ATOMIC_FLOAT atomic_data(*diff);
+            atomic_data += (float)val - dev_pagerank[u];
+            dev_pagerank_i[u] = val;
+        }
+        end;
 
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
-                       {
-                                for (; i < N; i += stride)
-                                {
-                                    dev_pagerank[i] = dev_pagerank_i[i];
-                                } }); })
-            .wait();
+        forall(N, NUM_THREADS)
+        {
+            dev_pagerank[u] = dev_pagerank_i[u];
+        }
+        end;
+
         iterCount += 1;
     } while ((*diff > beta) && (iterCount < maxIter));
 

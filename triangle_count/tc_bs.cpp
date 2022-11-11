@@ -62,16 +62,16 @@ int main(int argc, char **argv)
                     }
                     if (nbrs_connected)
                     {
-                        ATOMIC atomic_data(dev_triangle_count[0]);
+                        ATOMIC_INT atomic_data(dev_triangle_count[0]);
                         atomic_data += 1;
                     }
                 }
             }
         }
     }
-    end
+    end;
 
-        toc = std::chrono::steady_clock::now();
+    toc = std::chrono::steady_clock::now();
     logfile << "Time to run triangle count: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     memcpy(&triangle_count, dev_triangle_count, 1, Q);

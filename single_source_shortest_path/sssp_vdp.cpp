@@ -75,13 +75,13 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                ATOMIC atomic_data(dev_dist_i[v]);
+                ATOMIC_INT atomic_data(dev_dist_i[v]);
                 atomic_data.fetch_min(new_dist);
             }
         }
-        end
+        end;
 
-            *active_count = 0;
+        *active_count = 0;
         free(wl, Q);
         wl = malloc_shared<int>(N, Q);
 
@@ -90,12 +90,12 @@ int main(int argc, char **argv)
             if (dev_dist[u] > dev_dist_i[u])
             {
                 dev_dist[u] = dev_dist_i[u];
-                ATOMIC atomic_data(*active_count);
+                ATOMIC_INT atomic_data(*active_count);
                 wl[atomic_data++] = u;
             }
             dev_dist_i[u] = dev_dist[u];
         }
-        end
+        end;
     }
     toc = std::chrono::steady_clock::now();
     logfile << "Time to run SSSP: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;

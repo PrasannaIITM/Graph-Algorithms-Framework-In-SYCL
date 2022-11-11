@@ -11,13 +11,19 @@
 
 using namespace sycl;
 
-#define ATOMIC atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
+#define ATOMIC_INT atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
+#define ATOMIC_FLOAT atomic_ref<float, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
 
 #define get_neighbour(j) g->E[j]
+#define get_parent(j) g->RE[j]
 #define get_weight(j) g->W[j]
+#define get_num_neighbours(j) g->I[j + 1] - g->I[j]
 #define begin_neighbours(u) g->I[u]
 #define end_neighbours(u) g->I[u + 1]
+#define begin_parents(u) g->RI[u]
+#define end_parents(u) g->RI[u + 1]
 #define for_neighbours(u, j) for (j = begin_neighbours(u); j < end_neighbours(u); j++)
+#define for_parents(u, j) for (j = begin_parents(u); j < end_parents(u); j++)
 
 #define forall(N, NUM_THREADS) Q.submit([&](handler &h){ h.parallel_for(NUM_THREADS, [=](id<1> u){for (; u < N; u += NUM_THREADS)
 #define end \
