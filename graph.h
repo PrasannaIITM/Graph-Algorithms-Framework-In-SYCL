@@ -13,7 +13,7 @@ using namespace sycl;
 
 #define ATOMIC_INT atomic_ref<int, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
 #define ATOMIC_FLOAT atomic_ref<float, memory_order::relaxed, memory_scope::device, access::address_space::global_space>
-
+#define get_node(j) g->V[j]
 #define get_neighbour(j) g->E[j]
 #define get_parent(j) g->RE[j]
 #define get_weight(j) g->W[j]
@@ -140,6 +140,22 @@ void memcpy(T *dest, T *src, int N, queue Q)
 {
     Q.submit([&](handler &h)
              { h.memcpy(dest, src, N * sizeof(T)); })
+        .wait();
+}
+
+// copy contents of src to dest, both src and dest are of length N
+template <typename T>
+void copy(T *dest, T *src, int NUM_THREADS, int N, queue Q)
+{
+    int stride = NUM_THREADS;
+    Q.submit([&](handler &h)
+             { h.parallel_for(
+                   NUM_THREADS, [=](id<1> i)
+                   {
+                               for (; i < N ;i += stride)
+                               {
+                                    dest[i] = src[i];
+                               } }); })
         .wait();
 }
 

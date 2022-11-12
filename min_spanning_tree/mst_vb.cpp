@@ -1,7 +1,8 @@
 #include <CL/sycl.hpp>
 #include <iostream>
 #include <fstream>
-#define DEBUG 1
+#define DEBUG 0
+#include "../graph.h"
 
 using namespace sycl;
 
@@ -24,253 +25,187 @@ int main(int argc, char **argv)
     logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
-    std::vector<int> V, I, E, W;
-    load_from_file("csr_graphs/" + name + "/V", V);
-    load_from_file("csr_graphs/" + name + "/I", I);
-    load_from_file("csr_graphs/" + name + "/E", E);
-    load_from_file("csr_graphs/" + name + "/W", W);
-
+    graph *g = malloc_shared<graph>(1, Q);
+    g->load_graph(name, Q);
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
     logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    int n_vertices = V.size();
-    int n_edges = E.size();
+    int n_vertices = g->get_num_nodes();
+    int n_edges = g->get_num_edges();
     int stride = NUM_THREADS;
 
-    int *d_V = malloc_device<int>(V.size(), Q);
-    int *d_I = malloc_device<int>(I.size(), Q);
-    int *d_E = malloc_device<int>(E.size(), Q);
-    int *d_W = malloc_device<int>(W.size(), Q);
-
     int *d_parent = malloc_device<int>(n_vertices, Q);
+    copy(d_parent, g->V, NUM_THREADS, n_vertices, Q);
     int *d_local_min_edge = malloc_device<int>(n_vertices, Q);
     int *d_comp_min_edge = malloc_device<int>(n_vertices, Q);
     int *d_edge_in_mst = malloc_device<int>(n_edges, Q);
+    initialize(d_edge_in_mst, 0, NUM_THREADS, n_edges, Q);
 
-    bool *single_comp = malloc_shared<bool>(1, Q);
+    bool *rem_comp = malloc_shared<bool>(1, Q);
+    int *counter = malloc_shared<int>(1, Q);
     bool *found_min_edge = malloc_shared<bool>(1, Q);
     bool *parents_updated = malloc_shared<bool>(1, Q);
-
-    Q.submit([&](handler &h)
-             { h.memcpy(d_V, &V[0], V.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(d_I, &I[0], I.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(d_E, &E[0], E.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(d_W, &W[0], W.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.parallel_for(
-                   NUM_THREADS, [=](id<1> i)
-                   {
-                               for (; i < n_edges; i += stride)
-                               {
-                                    d_edge_in_mst[i] = 0;
-                               } }); })
-        .wait();
-
-    Q.submit([&](handler &h)
-             { h.parallel_for(
-                   NUM_THREADS, [=](id<1> i)
-                   {
-                               for (; i < n_vertices ;i += stride)
-                               {
-                                    d_parent[i] = i;
-                               } }); })
-        .wait();
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting minimum spanning tree calculation..." << std::endl;
 
-    *single_comp = false;
+    *rem_comp = false;
+    *counter = 0;
 
-    while (!*single_comp)
+    while (!*rem_comp)
     {
-        *single_comp = true;
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
-                       {
-                               for (; i < n_vertices ;i += stride)
-                               {
-                                    d_local_min_edge[i] = -1;
-                                    d_comp_min_edge[i] = -1;
-                               } }); })
-            .wait();
+        *rem_comp = true;
+
+        initialize(d_local_min_edge, -1, NUM_THREADS, n_vertices, Q);
+        initialize(d_comp_min_edge, -1, NUM_THREADS, n_vertices, Q);
 
         // find minimum edge to different component from each node
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> u)
-                       {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                   for(int edge = d_I[u]; edge < d_I[u + 1]; edge++){
-                                        int v = d_E[edge];
-                                        // if u and v in different components
-                                        if(d_parent[u] != d_parent[v]){
-                                            int curr_min_edge = d_local_min_edge[u];
-                                            if (curr_min_edge == -1)
-                                            { 
-                                                d_local_min_edge[u] = edge;
-                                            } 
-                                            else
-                                            { 
-                                                int curr_neigh = d_E[curr_min_edge];
-                                                if (d_W[edge] < d_W[curr_min_edge] || (d_W[edge] == d_W[curr_min_edge] && d_parent[v] < d_parent[curr_neigh]))
-                                                { 
-                                                    d_local_min_edge[u] = edge;
-                                                } 
-                                            } 
-                                        }
-                                   }
-                               } }); })
-            .wait();
+        forall(n_vertices, NUM_THREADS)
+        {
+            int edge;
+            for_neighbours(u, edge)
+            {
+                int v = get_neighbour(edge);
+                // if u and v in different components
+                if (d_parent[u] != d_parent[v])
+                {
+                    int curr_min_edge = d_local_min_edge[u];
+                    if (curr_min_edge == -1)
+                    {
+                        d_local_min_edge[u] = edge;
+                    }
+                    else
+                    {
+                        int curr_neigh = get_neighbour(curr_min_edge);
+                        int curr_edge_weight = get_weight(edge), curr_min_edge_weight = get_weight(curr_min_edge);
+                        if (curr_edge_weight < curr_min_edge_weight || (curr_edge_weight == curr_min_edge_weight && d_parent[v] < d_parent[curr_neigh]))
+                        {
+                            d_local_min_edge[u] = edge;
+                        }
+                    }
+                }
+            }
+        }
+        end;
 
         // find the minimum edge from the component
         *found_min_edge = false;
         while (!*found_min_edge)
         {
             *found_min_edge = true;
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           NUM_THREADS, [=](id<1> u)
-                           {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                    int my_comp = d_parent[u];
+            forall(n_vertices, NUM_THREADS)
+            {
+                int my_comp = d_parent[u];
 
-                                    int comp_min_edge = d_comp_min_edge[my_comp];
+                int comp_min_edge = d_comp_min_edge[my_comp];
 
-                                    int my_min_edge = d_local_min_edge[u];
+                int my_min_edge = d_local_min_edge[u];
 
-                                    if (my_min_edge!= -1)
-                                    {
-                                        int v = d_E[my_min_edge];
+                if (my_min_edge != -1)
+                {
+                    int v = get_neighbour(my_min_edge);
 
-                                        if (comp_min_edge == -1)
-                                        {
-                                            d_comp_min_edge[my_comp] = my_min_edge;
-                                            *found_min_edge = false;
-                                        }
-                                        else
-                                        {
-                                            int curr_min_neigh = d_E[comp_min_edge];
-                                            if (d_W[my_min_edge] < d_W[comp_min_edge] || (d_W[my_min_edge] == d_W[comp_min_edge] && d_parent[v] < d_parent[curr_min_neigh]))
-                                            {
-                                                d_comp_min_edge[my_comp] = my_min_edge;
-                                                *found_min_edge = false;
-                                            }
-
-                                        }
-
-                                    }
-                               } }); })
-                .wait();
+                    if (comp_min_edge == -1)
+                    {
+                        d_comp_min_edge[my_comp] = my_min_edge;
+                        *found_min_edge = false;
+                    }
+                    else
+                    {
+                        int curr_min_neigh = get_neighbour(comp_min_edge);
+                        int my_min_edge_weight = get_weight(my_min_edge), comp_min_edge_weight = get_weight(comp_min_edge);
+                        if (my_min_edge_weight < comp_min_edge_weight || (my_min_edge_weight == comp_min_edge_weight && d_parent[v] < d_parent[curr_min_neigh]))
+                        {
+                            d_comp_min_edge[my_comp] = my_min_edge;
+                            *found_min_edge = false;
+                        }
+                    }
+                }
+            }
+            end;
         }
 
         // remove cycles of 2 nodes
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> u)
-                       {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                    // if u is the representative of its component
-                                    if (d_parent[u] == d_V[u])
-                                    { 
-                                        int comp_min_edge = d_comp_min_edge[u];
-                                        if (comp_min_edge != -1)
-                                        {
-                                            int v = d_E[comp_min_edge];
-                                            int parent_v = d_parent[v];
+        forall(n_vertices, NUM_THREADS)
+        {
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int comp_min_edge = d_comp_min_edge[u];
+                if (comp_min_edge != -1)
+                {
+                    int v = get_neighbour(comp_min_edge);
+                    int parent_v = d_parent[v];
 
-                                            int v_comp_min_edge = d_comp_min_edge[parent_v];
-                                            if (v_comp_min_edge != -1)
-                                            {
-                                                // v is comp(u)'s neighbour
-                                                // w is comp(v)'s neighbout
-                                                int w = d_E[v_comp_min_edge];
-                                                if (d_parent[u] == d_parent[w] && d_parent[u] < d_parent[v])
-                                                { 
-                                                    d_comp_min_edge[parent_v] = -1;
-
-                                                } 
-
-                                            } 
-
-                                        }
-                                    }
-                               } }); })
-            .wait();
+                    int v_comp_min_edge = d_comp_min_edge[parent_v];
+                    if (v_comp_min_edge != -1)
+                    {
+                        // v is comp(u)'s neighbour
+                        // w is comp(v)'s neighbour
+                        int w = get_neighbour(v_comp_min_edge);
+                        if (d_parent[u] == d_parent[w] && d_parent[u] < d_parent[v])
+                        {
+                            d_comp_min_edge[d_parent[v]] = -1;
+                        }
+                    }
+                }
+            }
+        }
+        end;
 
         // update the MST edges
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> u)
-                       {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                   // if u is the representative of its component
-                                   if (d_parent[u] == d_V[u])
-                                   {
-                                       int curr_comp_min_edge = d_comp_min_edge[u];
-                                       if (curr_comp_min_edge != -1)
-                                       {
-                                           d_edge_in_mst[curr_comp_min_edge] = 1;
-                                       } 
+        forall(n_vertices, NUM_THREADS)
+        {
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int curr_comp_min_edge = d_comp_min_edge[u];
+                if (curr_comp_min_edge != -1)
+                {
+                    d_edge_in_mst[curr_comp_min_edge] = 1;
+                    ATOMIC_INT atomic_data(*counter);
+                    atomic_data += 1;
+                }
+            }
+        }
+        end;
 
-                                    } 
-                               } }); })
-            .wait();
+        logfile << "Num Edges: " << *counter << std::endl;
 
         // update parents
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> u)
-                       {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                   // if u is the representative of its component
-                                   if (d_parent[u] == d_V[u])
-                                   {
-                                       int curr_comp_min_edge = d_comp_min_edge[u];
-                                       if (curr_comp_min_edge != -1)
-                                       {
-                                           *single_comp = false;
-                                           int v = d_E[curr_comp_min_edge];
-                                           d_parent[u] = d_parent[v];
-                                       } 
-
-                                    } 
-                               } }); })
-            .wait();
+        forall(n_vertices, NUM_THREADS)
+        {
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int curr_comp_min_edge = d_comp_min_edge[u];
+                if (curr_comp_min_edge != -1)
+                {
+                    *rem_comp = false;
+                    int v = get_neighbour(curr_comp_min_edge);
+                    d_parent[u] = d_parent[v];
+                }
+            }
+        }
+        end;
 
         // flatten parents
         *parents_updated = false;
         while (!*parents_updated)
         {
             *parents_updated = true;
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           NUM_THREADS, [=](id<1> u)
-                           {
-                               for (; u < n_vertices; u += stride)
-                               {
-                                    int parent_u = d_parent[u]; 
-                                    int parent_parent_u = d_parent[parent_u];
+            forall(n_vertices, NUM_THREADS)
+            {
+                int parent_u = d_parent[u];
+                int parent_parent_u = d_parent[parent_u];
 
-                                    if (parent_u != parent_parent_u)
-                                    { 
-                                        *parents_updated = false;
-                                        d_parent[u] = parent_parent_u;
-                                    }
-                               } }); })
-                .wait();
+                if (parent_u != parent_parent_u)
+                {
+                    *parents_updated = false;
+                    d_parent[u] = parent_parent_u;
+                }
+            }
+            end;
         }
     }
     toc = std::chrono::steady_clock::now();
@@ -282,9 +217,8 @@ int main(int argc, char **argv)
     resultfile.open("min_spanning_tree/output/" + name + "_mst_vb_result_" + NUM_THREADS_STR + ".txt");
 
     std::vector<int> op(n_edges);
-    Q.submit([&](handler &h)
-             { h.memcpy(&op[0], d_edge_in_mst, n_edges * sizeof(int)); })
-        .wait();
+    memcpy(&op[0], d_edge_in_mst, n_edges, Q);
+
     int count = 0;
     for (int i = 0; i < n_edges; i++)
     {
