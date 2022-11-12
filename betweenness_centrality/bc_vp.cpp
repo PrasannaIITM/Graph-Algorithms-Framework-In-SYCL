@@ -2,7 +2,7 @@
 #include <iostream>
 #include <fstream>
 #define DEBUG 0
-
+#include "../graph.h"
 using namespace sycl;
 
 int main(int argc, char **argv)
@@ -26,7 +26,7 @@ int main(int argc, char **argv)
 
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_time_" + NUM_THREADS_STR + ".txt");
+    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_f_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
     default_selector d_selector;
@@ -35,40 +35,17 @@ int main(int argc, char **argv)
     logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
-    std::vector<int> V, I, E, RE, RI;
-    load_from_file("csr_graphs/" + name + "/V", V);
-    load_from_file("csr_graphs/" + name + "/I", I);
-    load_from_file("csr_graphs/" + name + "/E", E);
-
+    graph *g = malloc_shared<graph>(1, Q);
+    g->load_graph(name, Q);
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
     logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    int N = V.size();
+    int N = g->get_num_nodes();
     int stride = NUM_THREADS;
 
     std::vector<float> bc(N);
 
-    int *dev_V = malloc_device<int>(V.size(), Q);
-    int *dev_I = malloc_device<int>(I.size(), Q);
-    int *dev_E = malloc_device<int>(E.size(), Q);
-    float *dev_bc = malloc_shared<float>(bc.size(), Q);
-    float *dev_delta = malloc_shared<float>(N, Q);
-    int *S = malloc_shared<int>(N, Q);
-    int *dev_d = malloc_shared<int>(N, Q);
-    int *dev_sigma = malloc_shared<int>(N, Q);
-    int *ends = malloc_shared<int>(N, Q);
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_V, &V[0], V.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_I, &I[0], I.size() * sizeof(int)); });
-
-    Q.submit([&](handler &h)
-             { h.memcpy(dev_E, &E[0], E.size() * sizeof(int)); });
-
-    Q.wait();
-
+    float *dev_bc = malloc_device<float>(bc.size(), Q);
     Q.submit([&](handler &h)
              { h.parallel_for(
                    NUM_THREADS, [=](id<1> v)
@@ -78,10 +55,16 @@ int main(int argc, char **argv)
                                dev_bc[v] = 0;
                            } }); })
         .wait();
+    float *dev_delta = malloc_device<float>(N, Q);
+
+    int *dev_d = malloc_device<int>(N, Q);
+    int *dev_sigma = malloc_device<int>(N, Q);
 
     tic = std::chrono::steady_clock::now();
     logfile << "Starting betweenness centrality calculation..." << std::endl;
 
+    int *S = malloc_shared<int>(N, Q);
+    int *ends = malloc_shared<int>(N, Q);
     int *position = malloc_shared<int>(1, Q);
     int *s = malloc_shared<int>(1, Q);
     *s = 0;
@@ -92,25 +75,9 @@ int main(int argc, char **argv)
     for (auto x : sourceSet)
     {
         *s = x;
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
-                       {
-                           for (; i < N; i += stride)
-                           {
-                               if (i == *s)
-                               {
-                                   dev_d[i] = 0;
-                                   dev_sigma[i] = 1;
-                               }
-                               else
-                               {
-                                   dev_d[i] = INT_MAX;
-                                   dev_sigma[i] = 0;
-                               }
-                               dev_delta[i] = 0;
-                           } }); })
-            .wait();
+        initialize(dev_d, INT_MAX, NUM_THREADS, N, Q, *s, 0);
+        initialize(dev_sigma, 0, NUM_THREADS, N, Q, *s, 1);
+        initialize(dev_delta, float(0), NUM_THREADS, N, Q);
 
         *current_depth = 0;
         *done = 0;
@@ -121,35 +88,37 @@ int main(int argc, char **argv)
         while (!*done)
         {
             *done = 1;
-            Q.submit([&](handler &h)
-                     { h.parallel_for(
-                           NUM_THREADS, [=](id<1> i)
-                           {
-                           for (; i < N; i += stride)
-                           {
-                               if(dev_d[i] == *current_depth){
-                                atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(*position);
-                                int t = atomic_data++;
-                                S[t] = i;
-                                for(int r = dev_I[i]; r < dev_I[i + 1]; r++){
-                                    int w = dev_E[r];
-                                    if(dev_d[w] == INT_MAX){
-                                        dev_d[w] = dev_d[i] + 1;
-                                        *done = 0;
-                                    }
+            forall(N, NUM_THREADS)
+            {
+                if (dev_d[u] == *current_depth)
+                {
+                    ATOMIC_INT atomic_data(*position);
+                    int t = atomic_data++;
+                    S[t] = u;
+                    int r;
+                    for_neighbours(u, r)
+                    {
+                        int w = get_neighbour(r);
+                        if (dev_d[w] == INT_MAX)
+                        {
+                            dev_d[w] = dev_d[u] + 1;
+                            *done = 0;
+                        }
 
-                                    if(dev_d[w] == (dev_d[i] + 1)){
-                                        atomic_ref<int, memory_order::relaxed, memory_scope::system, access::address_space::global_space> atomic_data(dev_sigma[w]);
-                                        atomic_data += dev_sigma[i];
-                                    } 
-                                }
-                               }
-                           } }); })
-                .wait();
+                        if (dev_d[w] == (dev_d[u] + 1))
+                        {
+                            ATOMIC_INT atomic_data(dev_sigma[w]);
+                            atomic_data += dev_sigma[u];
+                        }
+                    }
+                }
+            }
+            end;
             *current_depth += 1;
             ends[*finish_limit_position] = *position;
             ++*finish_limit_position;
         }
+
         for (int itr1 = *finish_limit_position - 1; itr1 >= 0; itr1--)
         {
             Q.submit([&](handler &h)
@@ -157,8 +126,8 @@ int main(int argc, char **argv)
                            NUM_THREADS, [=](id<1> i)
                            {
                                     for(int itr2 = ends[itr1] + i; itr2 < ends[itr1 + 1]; itr2 += stride){
-                                        for(int itr3 = dev_I[S[itr2]]; itr3 < dev_I[S[itr2] + 1]; itr3++){
-                                            int consider = dev_E[itr3];
+                                        for(int itr3 = g->I[S[itr2]]; itr3 < g->I[S[itr2] + 1]; itr3++){
+                                            int consider = g->E[itr3];
                                             if(dev_d[consider] == dev_d[S[itr2]] + 1){
                                                 dev_delta[S[itr2]] += (((float)dev_sigma[S[itr2]] / dev_sigma[consider]) * ((float)1 + dev_delta[consider]));
 
@@ -171,35 +140,17 @@ int main(int argc, char **argv)
                                     } }); })
                 .wait();
         }
-        // serial implementation
-        // for (int itr1 = N - 1; itr1 >= 0; --itr1)
-        // {
-        //     for (int itr2 = I[S[itr1]]; itr2 < I[S[itr1] + 1]; ++itr2)
-        //     {
-        //         int consider = E[itr2];
-        //         if (dev_d[consider] == dev_d[S[itr1]] - 1)
-        //         {
-        //             dev_delta[consider] += (((float)dev_sigma[consider] / dev_sigma[S[itr1]]) * ((float)1 + dev_delta[S[itr1]]));
-        //         }
-        //     }
-        //     if (S[itr1] != *s)
-        //     {
-        //         dev_bc[S[itr1]] += dev_delta[S[itr1]];
-        //     }
-        // }
     }
 
     toc = std::chrono::steady_clock::now();
     logfile << "Time to run betweenness centrality: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
-    Q.submit([&](handler &h)
-             { h.memcpy(&bc[0], dev_bc, N * sizeof(float)); })
-        .wait();
+    memcpy(&bc[0], dev_bc, N, Q);
 
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
 
-    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_vp_f_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
