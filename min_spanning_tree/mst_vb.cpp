@@ -16,19 +16,25 @@ int main(int argc, char **argv)
     int NUM_THREADS = atoi(argv[2]);
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
+    default_selector d_selector;
+    queue Q(d_selector);
+
     logfile.open("min_spanning_tree/output/" + name + "_mst_vb_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
-    default_selector d_selector;
-    queue Q(d_selector);
-    logfile << "Selected device: " << Q.get_device().get_info<info::device::name>() << std::endl;
-    logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
+
     graph *g = malloc_shared<graph>(1, Q);
     g->load_graph(name, Q);
+
     std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
+    logfile << "Processing " << g->get_graph_name() << std::endl;
+    logfile << "Num nodes: " << g->get_num_nodes() << "\t"
+            << "Num edges: " << g->get_num_edges() << std::endl;
     logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    logfile << "Selected device: " << Q.get_device().get_info<info::device::name>() << std::endl;
+    logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
 
     int n_vertices = g->get_num_nodes();
     int n_edges = g->get_num_edges();
