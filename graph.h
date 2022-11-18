@@ -35,6 +35,7 @@ class graph
 private:
     int32_t num_nodes;
     int32_t num_edges;
+    std::string gname;
 
 public:
     int *V, *I, *E, *W, *RE, *RI;
@@ -49,6 +50,11 @@ public:
         return num_edges;
     }
 
+    std::string get_graph_name()
+    {
+        return gname;
+    }
+
     void set_num_nodes(int n)
     {
         num_nodes = n;
@@ -57,6 +63,11 @@ public:
     void set_num_edges(int n)
     {
         num_edges = n;
+    }
+
+    void set_graph_name(std::string name)
+    {
+        gname = name;
     }
 
     void load_graph(std::string name, queue Q)
@@ -75,6 +86,7 @@ public:
 
         set_num_edges(num_edges);
         set_num_nodes(num_nodes);
+        set_graph_name(name);
         V = malloc_device<int>(num_nodes, Q);
         I = malloc_device<int>((num_nodes + 1), Q);
         E = malloc_device<int>(num_edges, Q);
