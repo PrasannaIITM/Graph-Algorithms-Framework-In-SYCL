@@ -28,7 +28,7 @@ int main(int argc, char **argv)
 
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_ep_time_" + NUM_THREADS_STR + ".txt");
+    logfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_we_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
     default_selector d_selector;
@@ -175,7 +175,7 @@ int main(int argc, char **argv)
     tic = std::chrono::steady_clock::now();
     std::ofstream resultfile;
 
-    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_ep_result_" + NUM_THREADS_STR + ".txt");
+    resultfile.open("betweenness_centrality/output/" + name + "_" + str_sSize + "_bc_we_result_" + NUM_THREADS_STR + ".txt");
 
     for (int i = 0; i < N; i++)
     {
