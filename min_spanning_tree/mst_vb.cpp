@@ -16,25 +16,19 @@ int main(int argc, char **argv)
     int NUM_THREADS = atoi(argv[2]);
     std::string NUM_THREADS_STR = std::to_string(NUM_THREADS);
 
-    default_selector d_selector;
-    queue Q(d_selector);
-
     logfile.open("min_spanning_tree/output/" + name + "_mst_vb_time_" + NUM_THREADS_STR + ".txt");
 
     logfile << "Processing " << name << std::endl;
-
-    std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
-
-    graph *g = malloc_shared<graph>(1, Q);
-    g->load_graph(name, Q);
-
-    std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
-    logfile << "Processing " << g->get_graph_name() << std::endl;
-    logfile << "Num nodes: " << g->get_num_nodes() << "\t"
-            << "Num edges: " << g->get_num_edges() << std::endl;
-    logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
+    default_selector d_selector;
+    queue Q(d_selector);
     logfile << "Selected device: " << Q.get_device().get_info<info::device::name>() << std::endl;
     logfile << "Number of parallel work items: " << NUM_THREADS << std::endl;
+
+    std::chrono::steady_clock::time_point tic = std::chrono::steady_clock::now();
+    graph *g = malloc_shared<graph>(1, Q);
+    g->load_graph(name, Q);
+    std::chrono::steady_clock::time_point toc = std::chrono::steady_clock::now();
+    logfile << "Time to load data from files: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
 
     int n_vertices = g->get_num_nodes();
     int n_edges = g->get_num_edges();
@@ -94,63 +88,85 @@ int main(int argc, char **argv)
         }
         end;
 
-        *rem_comp = true;
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> i)
-                       {
-                               for (; i < n_vertices ;i += stride)
-                               {
-                                    d_local_min_edge[i] = -1;
-                                    d_comp_min_edge[i] = -1;
-                               } }); })
-            .wait();
+        // find the minimum edge from the component
+        *found_min_edge = false;
+        while (!*found_min_edge)
+        {
+            *found_min_edge = true;
+            forall(n_vertices, NUM_THREADS)
+            {
+                int my_comp = d_parent[u];
 
-        // find minimum edge to different component from each node
-        Q.submit([&](handler &h)
-                 { h.parallel_for(
-                       NUM_THREADS, [=](id<1> u)
-                       {
-                for (; u < n_vertices; u += stride)
+                int comp_min_edge = d_comp_min_edge[my_comp];
+
+                int my_min_edge = d_local_min_edge[u];
+
+                if (my_min_edge != -1)
                 {
-                    for (int edge = d_I[u]; edge < d_I[u + 1]; edge++)
+                    int v = get_neighbour(my_min_edge);
+
+                    if (comp_min_edge == -1)
                     {
-                        int v = d_E[edge];
-                        // if u and v in different components
-                        if (d_parent[u] != d_parent[v])
+                        d_comp_min_edge[my_comp] = my_min_edge;
+                        *found_min_edge = false;
+                    }
+                    else
+                    {
+                        int curr_min_neigh = get_neighbour(comp_min_edge);
+                        int my_min_edge_weight = get_weight(my_min_edge), comp_min_edge_weight = get_weight(comp_min_edge);
+                        if (my_min_edge_weight < comp_min_edge_weight || (my_min_edge_weight == comp_min_edge_weight && d_parent[v] < d_parent[curr_min_neigh]))
                         {
-                            int curr_min_edge = d_local_min_edge[u];
-                            if (curr_min_edge == -1)
-                            {
-                                d_local_min_edge[u] = edge;
-                            }
-                            else
-                            {
-                                int curr_neigh = d_E[curr_min_edge];
-                                if (d_W[edge] < d_W[curr_min_edge] || (d_W[edge] == d_W[curr_min_edge] && d_parent[v] < d_parent[curr_neigh]))
-                                    // if (d_W[edge] < d_W[curr_min_edge])
-                                    end;
-                            }
+                            d_comp_min_edge[my_comp] = my_min_edge;
+                            *found_min_edge = false;
                         }
                     }
                 }
+            }
+            end;
+        }
+
+        // remove cycles of 2 nodes
+        forall(n_vertices, NUM_THREADS)
+        {
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int comp_min_edge = d_comp_min_edge[u];
+                if (comp_min_edge != -1)
+                {
+                    int v = get_neighbour(comp_min_edge);
+                    int parent_v = d_parent[v];
+
+                    int v_comp_min_edge = d_comp_min_edge[parent_v];
+                    if (v_comp_min_edge != -1)
+                    {
+                        // v is comp(u)'s neighbour
+                        // w is comp(v)'s neighbour
+                        int w = get_neighbour(v_comp_min_edge);
+                        if (d_parent[u] == d_parent[w] && d_parent[u] < d_parent[v])
+                        {
+                            d_comp_min_edge[d_parent[v]] = -1;
+                        }
+                    }
+                }
+            }
         }
         end;
 
         // update the MST edges
         forall(n_vertices, NUM_THREADS)
         {
-                // if u is the representative of its component
-                if (d_parent[u] == get_node(u))
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int curr_comp_min_edge = d_comp_min_edge[u];
+                if (curr_comp_min_edge != -1)
                 {
-                    int curr_comp_min_edge = d_comp_min_edge[u];
-                    if (curr_comp_min_edge != -1)
-                    {
-                        d_edge_in_mst[curr_comp_min_edge] = 1;
-                        ATOMIC_INT atomic_data(*counter);
-                        atomic_data += 1;
-                    }
+                    d_edge_in_mst[curr_comp_min_edge] = 1;
+                    ATOMIC_INT atomic_data(*counter);
+                    atomic_data += 1;
                 }
+            }
         }
         end;
 
@@ -159,17 +175,17 @@ int main(int argc, char **argv)
         // update parents
         forall(n_vertices, NUM_THREADS)
         {
-                // if u is the representative of its component
-                if (d_parent[u] == get_node(u))
+            // if u is the representative of its component
+            if (d_parent[u] == get_node(u))
+            {
+                int curr_comp_min_edge = d_comp_min_edge[u];
+                if (curr_comp_min_edge != -1)
                 {
-                    int curr_comp_min_edge = d_comp_min_edge[u];
-                    if (curr_comp_min_edge != -1)
-                    {
-                        *rem_comp = false;
-                        int v = get_neighbour(curr_comp_min_edge);
-                        d_parent[u] = d_parent[v];
-                    }
+                    *rem_comp = false;
+                    int v = get_neighbour(curr_comp_min_edge);
+                    d_parent[u] = d_parent[v];
                 }
+            }
         }
         end;
 
@@ -177,48 +193,20 @@ int main(int argc, char **argv)
         *parents_updated = false;
         while (!*parents_updated)
         {
-                *parents_updated = true;
-                forall(n_vertices, NUM_THREADS)
+            *parents_updated = true;
+            forall(n_vertices, NUM_THREADS)
+            {
+                int parent_u = d_parent[u];
+                int parent_parent_u = d_parent[parent_u];
+
+                if (parent_u != parent_parent_u)
                 {
-                    int parent_u = d_parent[u];
-                    int parent_parent_u = d_parent[parent_u];
-
-                    if (parent_u != parent_parent_u)
-                    {
-                        *parents_updated = false;
-                        d_parent[u] = parent_parent_u;
-                    }
+                    *parents_updated = false;
+                    d_parent[u] = parent_parent_u;
                 }
-                end;
+            }
+            end;
         }
-        toc = std::chrono::steady_clock::now();
-        logfile << "Time to run minimum spanning tree: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-        tic = std::chrono::steady_clock::now();
-        std::ofstream resultfile;
-
-        resultfile.open("min_spanning_tree/output/" + name + "_mst_vb_result_" + NUM_THREADS_STR + ".txt");
-
-        std::vector<int> op(n_edges);
-        Q.submit([&](handler &h)
-                 {
-                h.memcpy(&op[0], d_edge_in_mst, n_edges * sizeof(int)); })
-            .wait();
-        int count = 0;
-        for (int i = 0; i < n_edges; i++)
-        {
-                if (op[i] == 1)
-                    count++;
-                resultfile << i << " " << op[i] << std::endl;
-        }
-        resultfile << "Num edges included in MST: " << count << " Total nodes in graph: " << n_vertices << std::endl;
-        resultfile.close();
-        toc = std::chrono::steady_clock::now();
-        logfile << "Time to write data to file: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
-
-        std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
-        logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
-        return 0;
     }
     toc = std::chrono::steady_clock::now();
     logfile << "Time to run minimum spanning tree: " << std::chrono::duration_cast<std::chrono::microseconds>(toc - tic).count() << "[µs]" << std::endl;
@@ -234,9 +222,9 @@ int main(int argc, char **argv)
     int count = 0;
     for (int i = 0; i < n_edges; i++)
     {
-            if (op[i] == 1)
-                count++;
-            resultfile << i << " " << op[i] << std::endl;
+        if (op[i] == 1)
+            count++;
+        resultfile << i << " " << op[i] << std::endl;
     }
     resultfile << "Num edges included in MST: " << count << " Total nodes in graph: " << n_vertices << std::endl;
     resultfile.close();
@@ -246,4 +234,4 @@ int main(int argc, char **argv)
     std::chrono::steady_clock::time_point toc_0 = std::chrono::steady_clock::now();
     logfile << "Total time taken: " << std::chrono::duration_cast<std::chrono::microseconds>(toc_0 - tic_0).count() << "[µs]" << std::endl;
     return 0;
-    }
+}
